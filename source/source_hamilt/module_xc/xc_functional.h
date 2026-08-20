@@ -52,6 +52,7 @@ class XC_Functional
         const int nspin,
         const bool domag,
         const bool domag_z,
+        const int gga_grad,
         const double hybrid_alpha,
         const double hse_omega);
 
@@ -231,6 +232,7 @@ class XC_Functional
         const int nspin,
         const bool domag,
         const bool domag_z,
+        const int gga_grad,
         const double hybrid_alpha,
         const double hse_omega);
 
@@ -255,7 +257,6 @@ class XC_Functional
         double* dh,
         const ModulePW::PW_Basis* rho_basis,
         const double tpiba);
-
     static void laplacian_rho(
         const std::complex<double>* rhog,
         double* lapl,
@@ -265,7 +266,7 @@ class XC_Functional
     static void noncolin_rho(
         double* rhoout1,
         double* rhoout2,
-        double* seg,
+        double* neg,
         const double* const* const rho,
         const int nrxx,
         const double* ux_,

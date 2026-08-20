@@ -18,6 +18,47 @@
 // modify test_size to test different size of unitcell
 int test_size = 10;
 int test_nw = 10;
+
+namespace
+{
+
+class SpinTrackingOperator : public hamilt::OperatorLCAO<double, double>
+{
+  public:
+    SpinTrackingOperator(const std::vector<ModuleBase::Vector3<double>>& kvec_d,
+                         const hamilt::calculation_type type)
+        : hamilt::OperatorLCAO<double, double>(nullptr, kvec_d, nullptr)
+    {
+        this->cal_type = type;
+    }
+
+    int current_spin_value() const
+    {
+        return this->current_spin;
+    }
+};
+
+} // namespace
+
+TEST(OperatorLCAOState, CurrentSpinPropagatesThroughMainAndSubChains)
+{
+    const std::vector<ModuleBase::Vector3<double>> kvec_d;
+    SpinTrackingOperator root(kvec_d, hamilt::calculation_type::lcao_overlap);
+    auto* main_node = new SpinTrackingOperator(kvec_d, hamilt::calculation_type::lcao_fixed);
+    auto* sub_node = new SpinTrackingOperator(kvec_d, hamilt::calculation_type::lcao_fixed);
+    auto* tail_node = new SpinTrackingOperator(kvec_d, hamilt::calculation_type::lcao_gint);
+    root.add(main_node);
+    root.add(sub_node);
+    root.add(tail_node);
+
+    root.set_current_spin(1);
+
+    EXPECT_EQ(root.current_spin_value(), 1);
+    EXPECT_EQ(main_node->current_spin_value(), 1);
+    EXPECT_EQ(sub_node->current_spin_value(), 1);
+    EXPECT_EQ(tail_node->current_spin_value(), 1);
+}
+
 class OverlapTest : public ::testing::Test
 {
   protected:

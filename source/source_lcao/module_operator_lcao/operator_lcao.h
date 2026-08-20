@@ -95,7 +95,26 @@ class OperatorLCAO : public Operator<TK> {
      /**
       * @brief set current spin index
       */
-    virtual void set_current_spin(const int current_spin_in) { this->current_spin = current_spin_in; }
+    virtual void set_current_spin(const int current_spin_in)
+    {
+        this->current_spin = current_spin_in;
+        if (this->next_op != nullptr)
+        {
+            auto* next = dynamic_cast<OperatorLCAO<TK, TR>*>(this->next_op);
+            if (next != nullptr)
+            {
+                next->set_current_spin(current_spin_in);
+            }
+        }
+        if (this->next_sub_op != nullptr)
+        {
+            auto* sub = dynamic_cast<OperatorLCAO<TK, TR>*>(this->next_sub_op);
+            if (sub != nullptr)
+            {
+                sub->set_current_spin(current_spin_in);
+            }
+        }
+    }
 
     // protected:
     // Hamiltonian matrices which are calculated in OperatorLCAO

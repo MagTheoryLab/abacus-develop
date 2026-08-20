@@ -9,6 +9,7 @@
 //  and gives the spin up and spin down components of the charge.
 
 #include "xc_functional.h"
+#include "xc_functional_ncgga_sf.h"
 #include "source_base/timer.h"
 #include "source_base/constants.h"
 #include "source_basis/module_pw/pw_basis_k.h"
@@ -65,6 +66,12 @@ void XC_Functional::gradcorr(
         {
             stress_gga.assign(9, 0.0);
         }
+        return;
+    }
+
+    if (is_stress && !use_libxc && nspin == 4 && (domag || domag_z) && gga_grad == 3)
+    {
+        ModuleXC::NCGGA_SF_Builtin::gradcorr_ncgga_sf_builtin(chr, rhopw, ucell, stress_gga);
         return;
     }
 

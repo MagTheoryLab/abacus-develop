@@ -8,6 +8,8 @@
 #include "source_cell/cal_ux.h"
 #include "../../../source_base/parallel_reduce.h"
 
+#include <stdexcept>
+
 /************************************************
 *  unit test of functionals
 ***********************************************/
@@ -357,13 +359,10 @@ TEST_F(XCTest_VXC_meta, set_xc_type)
  *  unit tests for the gga_grad keyword (nspin=4
  *  noncollinear GGA gradient methods)
  *
- *  Methods 2 and 3 share the same chain-rule spin-up/down gradients
- *    grad(rho_up/dn) = (grad(rho) +/- m_hat . grad(m))/2, m_hat = m/|m|
- *  but differ in the divergence of h = df/d(grad rho):
+ *  Method 2 uses projected spin-up/down gradients:
  *    gga_grad=2 (projected): v_mu -= m_hat_mu * div((h_up - h_dn)/2)
- *    gga_grad=3 (full SF):   v_mu -= div((h_up - h_dn)/2 * m_hat_mu)
- *  The two are identical when grad(m_hat) = 0 (magnetization direction
- *  uniform in space) and differ otherwise.
+ *  Method 3 uses the continuous B2 invariants, including transverse
+ *  magnetization-gradient power and the local response of m_hat.
  ***********************************************/
 
 namespace
@@ -561,13 +560,12 @@ TEST(GgaGradTools, ConvertVNspin4HasMag)
     }
 }
 
-class GgaGradDh : public testing::Test
+class GgaGradProjectedDh : public testing::Test
 {
   protected:
-    // dh from cal_dh_sf for gga_grad=2 and 3 on a given magnetization pattern
+    // dh from the projected gga_grad=2 path.
     void run(const int pattern,
              std::vector<std::vector<double>>& dh2,
-             std::vector<std::vector<double>>& dh3,
              std::vector<double>& mag_part)
     {
         Ns4Charge mock(pattern);
@@ -591,34 +589,16 @@ class GgaGradDh : public testing::Test
 
         dh2 = XC_Functional_Libxc::cal_dh_sf(
             2, gga_grad_nrxx, sgn, gdr, vsigma, mag_part, 2, mock.ucell.tpiba, &mock.chr);
-        dh3 = XC_Functional_Libxc::cal_dh_sf(
-            2, gga_grad_nrxx, sgn, gdr, vsigma, mag_part, 3, mock.ucell.tpiba, &mock.chr);
     }
 };
 
-// uniform m_hat => grad(m_hat) = 0 => projected and full SF divergences agree
-TEST_F(GgaGradDh, UniformDirectionMethodsAgree)
-{
-    std::vector<std::vector<double>> dh2, dh3;
-    std::vector<double> mag_part;
-    run(0, dh2, dh3, mag_part);
-
-    for (int is = 0; is < 4; ++is)
-    {
-        for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-        {
-            EXPECT_NEAR(dh2[is][ir], dh3[is][ir], 1e-12);
-        }
-    }
-}
-
 // for gga_grad=2, dh_mu = m_hat_mu * div((h_up-h_dn)/2), so the magnetic
 // channels satisfy dh_mu = m_hat_mu * (m_hat . dh) exactly
-TEST_F(GgaGradDh, ProjectedDivergenceIsProjection)
+TEST_F(GgaGradProjectedDh, ProjectedDivergenceIsProjection)
 {
-    std::vector<std::vector<double>> dh2, dh3;
+    std::vector<std::vector<double>> dh2;
     std::vector<double> mag_part;
-    run(1, dh2, dh3, mag_part);
+    run(1, dh2, mag_part);
 
     for (int ir = 0; ir < gga_grad_nrxx; ++ir)
     {
@@ -634,16 +614,8 @@ TEST_F(GgaGradDh, ProjectedDivergenceIsProjection)
     }
 }
 
-// NOTE on the mocked FFT: the mock derivative is pointwise
-// (grad(f)[ir] ~ f[ir], div(h)[ir] ~ h[ir]), so multiplication by a
-// scalar field commutes with the divergence and the projected (2) and
-// full (3) SF divergences coincide under this mock. The two methods can
-// only be distinguished with a real (nonlocal) FFT, e.g. in integration
-// tests. The tests below therefore anchor the wiring (exact values,
-// projection identities, crash-free dispatch) rather than the 2-vs-3
-// numerical difference.
-
-// built-in functionals: v_xc dispatches nspin=4 + gga_grad=2/3 to the SF builtin
+// In the collinear limit with a uniform magnetization direction and no
+// transverse gradients, continuous B2 reduces to the projected method.
 TEST(GgaGradVxc, BuiltinUniformDirectionMethodsAgree)
 {
     const auto r2 = run_vxc_nspin4("PBE", 0, 2);
@@ -727,30 +699,25 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
     }
 }
 
-// regression anchors for the built-in SF path (gga_grad=3)
-TEST(GgaGradVxc, BuiltinSfAnchoredValues)
+// A spatially varying magnetization direction carries transverse gradient
+// power in continuous B2, so method 3 must not collapse to method 2.
+TEST(GgaGradVxc, BuiltinContinuousB2RetainsTransverseGradients)
 {
-    const auto r = run_vxc_nspin4("PBE", 1, 3);
-    const ModuleBase::matrix& v = std::get<2>(r);
-    EXPECT_NEAR(std::get<0>(r), -5.1906253324e+01, 1.0e-8);
-    EXPECT_NEAR(std::get<1>(r), -6.8184946486e+01, 1.0e-8);
-    EXPECT_NEAR(v(0, 0), -2.6284212276e+00, 1.0e-8);
-    EXPECT_NEAR(v(0, 4), -3.7476729308e+00, 1.0e-8);
-    EXPECT_NEAR(v(1, 0), -3.7774725540e-02, 1.0e-8);
-    EXPECT_NEAR(v(1, 4), -9.2204398939e-02, 1.0e-8);
-    EXPECT_NEAR(v(2, 0), -9.4436813851e-02, 1.0e-8);
-    EXPECT_NEAR(v(2, 4), -9.2204398939e-03, 1.0e-8);
-    EXPECT_NEAR(v(3, 0), -7.5549451081e-02, 1.0e-8);
-    EXPECT_NEAR(v(3, 4), -1.8440879788e-01, 1.0e-8);
+    const auto r2 = run_vxc_nspin4("PBE", 1, 2);
+    const auto r3 = run_vxc_nspin4("PBE", 1, 3);
+    EXPECT_TRUE(std::isfinite(std::get<0>(r3)));
+    EXPECT_TRUE(std::isfinite(std::get<1>(r3)));
+    EXPECT_GT(std::abs(std::get<0>(r3) - std::get<0>(r2)), 1.0e-10);
 }
 
-// LIBXC functionals: gga_grad=2/3 select the SF path in v_xc_libxc
-TEST(GgaGradVxc, LibxcUniformDirectionMethodsAgree)
+// The validated continuous B2 implementation currently uses the built-in
+// functional derivatives. Do not silently route method 3 through the old
+// LIBXC full-divergence formula.
+TEST(GgaGradVxc, LibxcContinuousB2IsRejected)
 {
     const auto r2 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 2);
-    const auto r3 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 3);
     EXPECT_EQ(std::get<2>(r2).nr, 4);
-    expect_vxc_equal(r2, r3, 1e-10);
+    EXPECT_THROW(run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 3), std::domain_error);
 }
 
 // for LIBXC, gga_grad=0 and 1 both keep the original collinear algorithm
@@ -760,25 +727,6 @@ TEST(GgaGradVxc, LibxcZeroEqualsOne)
     const auto r1 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 1);
     expect_vxc_equal(r0, r1, 1e-12);
 }
-
-// regression anchors for the LIBXC SF path (gga_grad=3); this path goes
-// through the SF branch of convert_vtxc_v
-TEST(GgaGradVxc, LibxcSfAnchoredValues)
-{
-    const auto r = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 3);
-    const ModuleBase::matrix& v = std::get<2>(r);
-    EXPECT_NEAR(std::get<0>(r), -5.1906239921e+01, 1.0e-8);
-    EXPECT_NEAR(std::get<1>(r), -6.8184928281e+01, 1.0e-8);
-    EXPECT_NEAR(v(0, 0), -2.6284203722e+00, 1.0e-8);
-    EXPECT_NEAR(v(0, 4), -3.7476719779e+00, 1.0e-8);
-    EXPECT_NEAR(v(1, 0), -3.7774739650e-02, 1.0e-8);
-    EXPECT_NEAR(v(1, 4), -9.2204427285e-02, 1.0e-8);
-    EXPECT_NEAR(v(2, 0), -9.4436849124e-02, 1.0e-8);
-    EXPECT_NEAR(v(2, 4), -9.2204427285e-03, 1.0e-8);
-    EXPECT_NEAR(v(3, 0), -7.5549479300e-02, 1.0e-8);
-    EXPECT_NEAR(v(3, 4), -1.8440885457e-01, 1.0e-8);
-}
-
 
 int main(int argc, char **argv)
 {

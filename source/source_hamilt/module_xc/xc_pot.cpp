@@ -9,6 +9,7 @@
 #include "xc_functional.h"
 
 #include "xc_functional_ncgga_sf.h"
+#include <stdexcept>
 
 #ifdef __LIBXC
 #include "libxc_abacus.h"
@@ -33,6 +34,12 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 {
     ModuleBase::TITLE("XC_Functional", "v_xc");
 
+    const bool is_gga = XC_Functional::get_func_type() == 2 || XC_Functional::get_func_type() == 4;
+    if (is_gga && nspin == 4 && (domag || domag_z) && gga_grad == 3 && use_libxc)
+    {
+        throw std::domain_error("gga_grad=3 continuous noncollinear GGA is not implemented for LIBXC functionals");
+    }
+
     if (use_libxc)
     {
 #ifdef __LIBXC
@@ -53,11 +60,8 @@ std::tuple<double, double, ModuleBase::matrix> XC_Functional::v_xc(
 #endif
     }
 
-    // For non-libxc builds: gga_grad=2/3 uses the SF builtin that computes the
-    // full nspin=4 GGA potential via the Scalmani-Frisch transformation
-    // (gga_grad=2: projected divergence, gga_grad=3: full divergence).
-    // This path handles spin-up/spin-down decomposition and gradient
-    // corrections internally, returning (etxc, vtxc, v) directly.
+    // Built-in gga_grad=2/3 are implemented together in the existing
+    // noncollinear GGA path.
     if (nspin == 4 && (domag || domag_z) && (gga_grad == 2 || gga_grad == 3))
     {
         return ModuleXC::NCGGA_SF_Builtin::v_xc_ncgga_sf_builtin(nrxx, ucell->omega, ucell->tpiba, chr, gga_grad);

@@ -699,15 +699,56 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
     }
 }
 
-// A spatially varying magnetization direction carries transverse gradient
-// power in continuous B2, so method 3 must not collapse to method 2.
-TEST(GgaGradVxc, BuiltinContinuousB2RetainsTransverseGradients)
+// The diagonal FFT mock maps every field value at a grid point to a gradient
+// parallel to the same mock reciprocal vector. Consequently
+//   sum_mu |grad m_mu|^2 = |sum_mu m_hat_mu grad m_mu|^2
+// point by point, even when the sampled magnetization direction varies. This
+// mock therefore cannot be used as evidence for transverse B2 energy.
+TEST(GgaGradVxc, BuiltinDiagonalFftMockCannotTestTransverseB2Energy)
 {
+    Ns4Charge mock(1);
+    const std::vector<double> mag_part
+        = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
+    std::vector<std::vector<ModuleBase::Vector3<double>>> grad_m(
+        3, std::vector<ModuleBase::Vector3<double>>(gga_grad_nrxx));
+    std::vector<std::complex<double>> reciprocal(gga_grad_nrxx);
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        mock.rhopw.real2recip(mock.chr.rho[mu + 1], reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(),
+                                grad_m[mu].data(),
+                                &mock.rhopw,
+                                mock.ucell.tpiba);
+    }
+
+    double direction_change = 0.0;
+    double transverse_power = 0.0;
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        const double difference
+            = mag_part[1 + mu * gga_grad_nrxx] - mag_part[mu * gga_grad_nrxx];
+        direction_change += difference * difference;
+    }
+    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
+    {
+        ModuleBase::Vector3<double> grad_magnitude;
+        double component_power = 0.0;
+        for (int mu = 0; mu < 3; ++mu)
+        {
+            component_power += grad_m[mu][ir] * grad_m[mu][ir];
+            grad_magnitude += mag_part[ir + mu * gga_grad_nrxx] * grad_m[mu][ir];
+        }
+        transverse_power += std::abs(component_power - grad_magnitude * grad_magnitude);
+    }
+
+    EXPECT_GT(direction_change, 1.0e-4);
+    EXPECT_LE(transverse_power, 1.0e-12);
+
     const auto r2 = run_vxc_nspin4("PBE", 1, 2);
     const auto r3 = run_vxc_nspin4("PBE", 1, 3);
     EXPECT_TRUE(std::isfinite(std::get<0>(r3)));
     EXPECT_TRUE(std::isfinite(std::get<1>(r3)));
-    EXPECT_GT(std::abs(std::get<0>(r3) - std::get<0>(r2)), 1.0e-10);
+    EXPECT_NEAR(std::get<0>(r3), std::get<0>(r2), 1.0e-12);
 }
 
 // The validated continuous B2 implementation currently uses the built-in

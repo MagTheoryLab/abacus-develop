@@ -1,8 +1,10 @@
 #include "../xc_functional.h"
+#include "../xc_functional_ncgga_sf.h"
 
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
 #include "source_basis/module_pw/pw_basis.h"
+#include "source_estate/module_charge/charge.h"
 
 #ifdef __MPI
 #include "source_base/parallel_comm.h"
@@ -19,6 +21,12 @@
 #include <iostream>
 #include <vector>
 
+// This focused target does not link the full elecstate object library. The
+// fixture supplies vector-backed charge storage, so only the trivial lifetime
+// boundary is needed here.
+Charge::Charge() {}
+Charge::~Charge() {}
+
 namespace
 {
 
@@ -27,6 +35,17 @@ double pool_sum(const double local)
 #ifdef __MPI
     double global = 0.0;
     MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, POOL_WORLD);
+    return global;
+#else
+    return local;
+#endif
+}
+
+double pool_min(const double local)
+{
+#ifdef __MPI
+    double global = 0.0;
+    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MIN, POOL_WORLD);
     return global;
 #else
     return local;
@@ -174,6 +193,110 @@ TEST_F(RealPwNcgga, GradAndDivAreNegativeAdjoints)
                   << "NCGGA_ADJOINT identity=" << identity
                   << " norm=" << norm
                   << " scaled_error=" << std::abs(identity) / norm << '\n';
+    }
+}
+
+TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
+{
+    std::array<std::vector<double>, 4> density;
+    std::array<double*, 4> density_ptr;
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        density[channel].resize(pw.nrxx);
+        density_ptr[channel] = density[channel].data();
+    }
+    std::vector<double> core_density(pw.nrxx, 0.0);
+    std::vector<std::complex<double>> core_density_reciprocal(pw.npw, 0.0);
+
+    double local_min_magnitude = 1.0e100;
+    double local_min_spin_gap = 1.0e100;
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        const int ix = ir / (pw.ny * pw.nplane);
+        const int iy = (ir / pw.nplane) % pw.ny;
+        const int iz = ir % pw.nplane + pw.startz_current;
+        const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
+        const double y = ModuleBase::TWO_PI * static_cast<double>(iy) / pw.ny;
+        const double z = ModuleBase::TWO_PI * static_cast<double>(iz) / pw.nz;
+        const double magnitude = 0.42 + 0.04 * std::cos(2.0 * x - y + 0.17);
+        const double polar_angle = 0.90;
+        const double azimuth = x + 2.0 * y + z + 0.23;
+        const double sin_polar = std::sin(polar_angle);
+
+        density[0][ir] = 1.60 + 0.12 * std::cos(x - y + 0.31)
+                               + 0.08 * std::sin(2.0 * z - 0.27);
+        density[1][ir] = magnitude * sin_polar * std::cos(azimuth);
+        density[2][ir] = magnitude * sin_polar * std::sin(azimuth);
+        density[3][ir] = magnitude * std::cos(polar_angle);
+        local_min_magnitude = std::min(local_min_magnitude, magnitude);
+        local_min_spin_gap
+            = std::min(local_min_spin_gap, density[0][ir] - magnitude);
+    }
+
+    Charge charge;
+    charge.rhopw = &pw;
+    charge.nrxx = pw.nrxx;
+    charge.nxyz = pw.nxyz;
+    charge.ngmc = pw.npw;
+    charge.nspin = 4;
+    charge.rho = density_ptr.data();
+    charge.rho_core = core_density.data();
+    charge.rhog_core = core_density_reciprocal.data();
+
+    std::array<std::vector<ModuleBase::Vector3<double>>, 3> grad_m;
+    std::vector<std::complex<double>> reciprocal(pw.npw);
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        grad_m[mu].resize(pw.nrxx);
+        pw.real2recip(density[mu + 1].data(), reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(), grad_m[mu].data(), &pw, pw.tpiba);
+    }
+    double local_transverse_power = 0.0;
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        const double magnitude = std::sqrt(density[1][ir] * density[1][ir]
+                                           + density[2][ir] * density[2][ir]
+                                           + density[3][ir] * density[3][ir]);
+        ModuleBase::Vector3<double> projected_gradient;
+        double component_power = 0.0;
+        for (int mu = 0; mu < 3; ++mu)
+        {
+            component_power += grad_m[mu][ir] * grad_m[mu][ir];
+            projected_gradient
+                += density[mu + 1][ir] / magnitude * grad_m[mu][ir];
+        }
+        local_transverse_power
+            += component_power - projected_gradient * projected_gradient;
+    }
+    const double transverse_power
+        = pw.omega / pw.nxyz * pool_sum(local_transverse_power);
+    const double min_magnitude = pool_min(local_min_magnitude);
+    const double min_spin_gap = pool_min(local_min_spin_gap);
+
+    XC_Functional::set_xc_type("PBE");
+    const auto projected = ModuleXC::NCGGA_SF_Builtin::v_xc_ncgga_sf_builtin(
+        pw.nrxx, pw.omega, pw.tpiba, &charge, 2);
+    const auto continuous_b2 = ModuleXC::NCGGA_SF_Builtin::v_xc_ncgga_sf_builtin(
+        pw.nrxx, pw.omega, pw.tpiba, &charge, 3);
+    const double energy_projected = std::get<0>(projected);
+    const double energy_b2 = std::get<0>(continuous_b2);
+    const double energy_difference = energy_b2 - energy_projected;
+    const double energy_scale
+        = std::max(1.0, std::max(std::abs(energy_projected), std::abs(energy_b2)));
+
+    EXPECT_GT(min_magnitude, 0.30);
+    EXPECT_GT(min_spin_gap, 0.90);
+    EXPECT_GT(transverse_power, 1.0e-4);
+    EXPECT_GT(std::abs(energy_difference), 1.0e-8 * energy_scale);
+    if (is_pool_root())
+    {
+        std::cout << std::setprecision(17)
+                  << "NCGGA_B2_NONDEGENERACY energy_gga2=" << energy_projected
+                  << " energy_gga3=" << energy_b2
+                  << " delta=" << energy_difference
+                  << " transverse_power=" << transverse_power
+                  << " min_magnitude=" << min_magnitude
+                  << " min_spin_gap=" << min_spin_gap << '\n';
     }
 }
 

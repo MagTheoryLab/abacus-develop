@@ -86,6 +86,11 @@ AddTest(
 )
 
 AddTest(
+  TARGET MODULE_HAMILT_XCTest_NCGGA_RADIAL
+  SOURCES test_ncgga_radial.cpp ../xc_ncgga_radial.cpp
+)
+
+AddTest(
   TARGET MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
   LIBS xc_ planewave parameter MPI::MPI_CXX Libxc::xc psi device container base
   SOURCES test_ncgga_discrete_fd.cpp

@@ -124,6 +124,7 @@ class RealPwNcgga : public testing::Test
   protected:
     typedef std::tuple<double, double, ModuleBase::matrix> VxcResult;
     typedef std::function<VxcResult()> Evaluator;
+    typedef std::function<std::vector<double>()> StressEvaluator;
 
     struct BranchMargins
     {
@@ -303,6 +304,7 @@ class RealPwNcgga : public testing::Test
         const std::vector<int> functionals = {XC_LDA_X, XC_LDA_C_PZ};
         return evaluate_libxc(functionals, nullptr);
     }
+
 #endif
 
     void set_uniform_state(const double total_density,
@@ -465,7 +467,8 @@ class RealPwNcgga : public testing::Test
         const int stress_row,
         const int stress_column,
         const double epsilon,
-        const bool homogeneous_density_scaling)
+        const bool homogeneous_density_scaling,
+        const Evaluator& evaluator)
     {
         restore_reciprocal_metric_state(state);
 
@@ -503,14 +506,15 @@ class RealPwNcgga : public testing::Test
                 core_density.data(), core_density_reciprocal.data());
         }
 
-        const double energy = std::get<0>(evaluate_builtin(2));
+        const double energy = std::get<0>(evaluator());
         restore_reciprocal_metric_state(state);
         return energy;
     }
 
-    std::vector<double> evaluate_builtin_gradient_stress()
+    std::vector<double> evaluate_gradient_stress_dispatch(
+        const std::string& functional)
     {
-        XC_Functional::set_xc_type("PBE");
+        XC_Functional::set_xc_type(functional);
         UnitCell cell;
         cell.tpiba = pw.tpiba;
         cell.magnet.lsign_ = false;
@@ -536,13 +540,28 @@ class RealPwNcgga : public testing::Test
         return stress;
     }
 
-    void expect_builtin_gradient_stress_metric_derivative(
-        const std::string& mode)
+    std::vector<double> evaluate_builtin_gradient_stress()
+    {
+        return evaluate_gradient_stress_dispatch("PBE");
+    }
+
+#ifdef __LIBXC
+    std::vector<double> evaluate_libxc_pbe_gradient_stress_dispatch()
+    {
+        return evaluate_gradient_stress_dispatch("GGA_X_PBE+GGA_C_PBE");
+    }
+#endif
+
+    void expect_gradient_stress_metric_derivative(
+        const std::string& mode,
+        const Evaluator& energy_evaluator,
+        const StressEvaluator& stress_evaluator,
+        const double relative_tolerance,
+        const double absolute_floor)
     {
         const ReciprocalMetricState state
             = capture_reciprocal_metric_state();
-        const std::vector<double> local_stress
-            = evaluate_builtin_gradient_stress();
+        const std::vector<double> local_stress = stress_evaluator();
         const std::array<double, 4> eps_values
             = {{2.0e-3, 1.0e-3, 5.0e-4, 2.5e-4}};
 
@@ -561,10 +580,20 @@ class RealPwNcgga : public testing::Test
                     const double epsilon = eps_values[ieps];
                     const double energy_plus
                         = evaluate_reciprocal_metric_deformation(
-                            state, row, column, epsilon, false);
+                            state,
+                            row,
+                            column,
+                            epsilon,
+                            false,
+                            energy_evaluator);
                     const double energy_minus
                         = evaluate_reciprocal_metric_deformation(
-                            state, row, column, -epsilon, false);
+                            state,
+                            row,
+                            column,
+                            -epsilon,
+                            false,
+                            energy_evaluator);
                     const double finite_difference
                         = -(energy_plus - energy_minus)
                           / (2.0 * epsilon * state.omega);
@@ -600,7 +629,8 @@ class RealPwNcgga : public testing::Test
                 // roundoff plateau; the relative term still resolves every
                 // nonzero component in this fixture.
                 const double scale = std::max(1.0e-10, std::abs(analytic));
-                const double tolerance = 2.0e-5 * scale + 2.0e-13;
+                const double tolerance
+                    = relative_tolerance * scale + absolute_floor;
                 EXPECT_LE(*std::min_element(errors.begin(), errors.end()),
                           tolerance);
                 // Once the absolute error is at the MPI energy-roundoff
@@ -608,7 +638,7 @@ class RealPwNcgga : public testing::Test
                 // Require the central-difference O(eps^2) contraction only
                 // while both adjacent errors are still resolved above that
                 // plateau.  The closure check above remains unconditional.
-                const double roundoff_plateau = 2.0e-12;
+                const double roundoff_plateau = 10.0 * absolute_floor;
                 if (errors[0] > roundoff_plateau
                     && errors[1] > roundoff_plateau)
                 {
@@ -623,8 +653,21 @@ class RealPwNcgga : public testing::Test
         }
     }
 
-    void expect_builtin_full_xc_diagonal_stress(
+    void expect_builtin_gradient_stress_metric_derivative(
         const std::string& mode)
+    {
+        expect_gradient_stress_metric_derivative(
+            mode,
+            [this]() { return evaluate_builtin(2); },
+            [this]() { return evaluate_builtin_gradient_stress(); },
+            2.0e-5,
+            2.0e-13);
+    }
+
+    void expect_full_xc_diagonal_stress(
+        const std::string& mode,
+        const Evaluator& energy_evaluator,
+        const StressEvaluator& stress_evaluator)
     {
         // The returned vtxc is a valence-only four-channel inner product.
         // Core deformation is accounted separately by stress_cc in the full
@@ -636,9 +679,8 @@ class RealPwNcgga : public testing::Test
                   0.0);
         const ReciprocalMetricState state
             = capture_reciprocal_metric_state();
-        const VxcResult base = evaluate_builtin(2);
-        const std::vector<double> local_stress
-            = evaluate_builtin_gradient_stress();
+        const VxcResult base = energy_evaluator();
+        const std::vector<double> local_stress = stress_evaluator();
         const double diagonal_local_term
             = -(std::get<0>(base) - std::get<1>(base)) / state.omega;
         const std::array<double, 4> eps_values
@@ -658,10 +700,20 @@ class RealPwNcgga : public testing::Test
                 const double epsilon = eps_values[ieps];
                 const double energy_plus
                     = evaluate_reciprocal_metric_deformation(
-                        state, diagonal, diagonal, epsilon, true);
+                        state,
+                        diagonal,
+                        diagonal,
+                        epsilon,
+                        true,
+                        energy_evaluator);
                 const double energy_minus
                     = evaluate_reciprocal_metric_deformation(
-                        state, diagonal, diagonal, -epsilon, true);
+                        state,
+                        diagonal,
+                        diagonal,
+                        -epsilon,
+                        true,
+                        energy_evaluator);
                 const double finite_difference
                     = -(energy_plus - energy_minus)
                       / (2.0 * epsilon * state.omega);
@@ -697,6 +749,15 @@ class RealPwNcgga : public testing::Test
             EXPECT_LE(errors[1], 0.4 * errors[0] + 1.0e-8 * scale);
             EXPECT_LE(errors[2], 0.4 * errors[1] + 1.0e-8 * scale);
         }
+    }
+
+    void expect_builtin_full_xc_diagonal_stress(
+        const std::string& mode)
+    {
+        expect_full_xc_diagonal_stress(
+            mode,
+            [this]() { return evaluate_builtin(2); },
+            [this]() { return evaluate_builtin_gradient_stress(); });
     }
 
     BranchMargins report_branch_margins(const std::string& mode)
@@ -1831,6 +1892,114 @@ TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesMixedLdaAndGgaComponents)
         {1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
     expect_vtxc_matches_returned_potential(
         "libxc_gga2_mixed_lda_gga", evaluate);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2StressProductionDispatchClosesSmoothMetricDerivative)
+{
+    const BranchMargins margins = report_branch_margins("libxc_stress_smooth");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    EXPECT_GT(margins.min_eta_distance, 0.3);
+
+    // The analytic tensor must come through the existing public production
+    // dispatch.  Keeping the new helper out of the test-only patch lets the
+    // matched parent build and fail on the numerical identity, not at link
+    // time because the child-only helper does not exist yet.
+    expect_gradient_stress_metric_derivative(
+        "libxc_smooth_dispatch",
+        [this]() { return evaluate_libxc_gga(); },
+        [this]() { return evaluate_libxc_pbe_gradient_stress_dispatch(); },
+        3.0e-4,
+        1.0e-11);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2StressProductionDispatchClosesLocalMapBranches)
+{
+    const Evaluator energy = [this]() { return evaluate_libxc_gga(); };
+    const StressEvaluator stress
+        = [this]() { return evaluate_libxc_pbe_gradient_stress_dispatch(); };
+
+    set_negative_gga_state();
+    const BranchMargins negative
+        = report_branch_margins("libxc_stress_negative_abs");
+    EXPECT_GT(negative.min_abs_total_density, 1.3);
+    EXPECT_GT(negative.min_signed_saturation_gap, 0.8);
+    expect_gradient_stress_metric_derivative(
+        "libxc_negative_abs_dispatch", energy, stress, 3.0e-4, 1.0e-11);
+
+    set_saturated_gga_state();
+    const BranchMargins saturated
+        = report_branch_margins("libxc_stress_saturated");
+    EXPECT_LT(saturated.max_signed_saturation_gap, -0.1);
+    expect_gradient_stress_metric_derivative(
+        "libxc_saturated_dispatch", energy, stress, 3.0e-4, 1.0e-11);
+
+    set_inside_eta_state();
+    const BranchMargins radial
+        = report_branch_margins("libxc_stress_inside_eta");
+    EXPECT_LT(radial.max_magnitude, 6.0e-4);
+    EXPECT_GT(radial.min_eta_distance, 4.0e-4);
+    expect_gradient_stress_metric_derivative(
+        "libxc_inside_eta_dispatch", energy, stress, 3.0e-4, 1.0e-11);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2StressAggregatesPublicFunctionalScaling)
+{
+    const std::vector<int> gga
+        = {XC_GGA_X_ITYH, XC_GGA_C_LYPR, XC_GGA_X_B88, XC_GGA_C_LYP};
+    const std::map<int, double> scaling
+        = {{XC_GGA_X_ITYH, -1.0},
+           {XC_GGA_C_LYPR, -1.0},
+           {XC_GGA_X_B88, 1.0},
+           {XC_GGA_C_LYP, 1.0}};
+    const std::vector<double> exchange_short
+        = evaluate_gradient_stress_dispatch("GGA_X_ITYH");
+    const std::vector<double> correlation_short
+        = evaluate_gradient_stress_dispatch("GGA_C_LYPR");
+    const std::vector<double> exchange_full
+        = evaluate_gradient_stress_dispatch("GGA_X_B88");
+    const std::vector<double> correlation_full
+        = evaluate_gradient_stress_dispatch("GGA_C_LYP");
+    const std::vector<double> scaled
+        = evaluate_gradient_stress_dispatch("BLYP_LR");
+    ASSERT_EQ(exchange_short.size(), 9U);
+    ASSERT_EQ(correlation_short.size(), 9U);
+    ASSERT_EQ(exchange_full.size(), 9U);
+    ASSERT_EQ(correlation_full.size(), 9U);
+    ASSERT_EQ(scaled.size(), 9U);
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column <= row; ++column)
+        {
+            const int index = row * 3 + column;
+            const double expected = -exchange_short[index]
+                                    - correlation_short[index]
+                                    + exchange_full[index]
+                                    + correlation_full[index];
+            EXPECT_NEAR(scaled[index],
+                        expected,
+                        3.0e-12 * std::max(1.0, std::abs(expected)));
+        }
+    }
+    expect_gradient_stress_metric_derivative(
+        "libxc_blyp_lr_dispatch",
+        [this, &gga, &scaling]() { return evaluate_libxc(gga, &scaling); },
+        [this]() { return evaluate_gradient_stress_dispatch("BLYP_LR"); },
+        3.0e-4,
+        1.0e-11);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2StressProductionDispatchClosesFullXcDiagonalWithoutCore)
+{
+    set_zero_core_density();
+    const BranchMargins margins
+        = report_branch_margins("libxc_full_xc_no_core");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_full_xc_diagonal_stress(
+        "libxc_full_xc_dispatch_no_core",
+        [this]() { return evaluate_libxc_gga(); },
+        [this]() { return evaluate_libxc_pbe_gradient_stress_dispatch(); });
 }
 #endif
 

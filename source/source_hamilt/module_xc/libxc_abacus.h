@@ -92,6 +92,19 @@ namespace XC_Functional_Libxc
         const double hybrid_alpha,
         const double hse_omega);
 
+    // Reciprocal-metric derivative of the exact gga_grad=2 Libxc energy
+    // graph. The returned lower-triangular tensor is the unnormalized local
+    // grid sum; Stress_Func performs the pool reduction and divides by nxyz.
+    extern void gradcorr_ncgga_sf_libxc(
+        const std::vector<int>& func_id,
+        const std::size_t nrxx,
+        const double tpiba,
+        const Charge* const chr,
+        const std::map<int, double>* scaling_factor,
+        const double hybrid_alpha,
+        const double hse_omega,
+        std::vector<double>& stress_gga);
+
     // for mGGA functional
     extern std::tuple<double, double, ModuleBase::matrix, ModuleBase::matrix> v_xc_meta(
         const std::vector<int> &func_id,

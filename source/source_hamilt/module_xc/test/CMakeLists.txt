@@ -86,6 +86,30 @@ AddTest(
 )
 
 AddTest(
+  TARGET MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+  LIBS xc_ planewave parameter MPI::MPI_CXX Libxc::xc psi device container base
+  SOURCES test_ncgga_discrete_fd.cpp
+)
+set_tests_properties(
+  MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+  PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1"
+)
+add_test(
+  NAME MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD_MPI2
+  COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+          ${MPIEXEC_PREFLAGS}
+          $<TARGET_FILE:MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD>
+          ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+  MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD_MPI2
+  PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1"
+    PROCESSORS 2
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD>
+)
+
+AddTest(
   TARGET MODULE_HAMILT_XCTest_SCANL_LAPL
   LIBS parameter MPI::MPI_CXX Libxc::xc
   SOURCES test_xc6.cpp ../xc_functional.cpp ../xc_lda_wrap.cpp

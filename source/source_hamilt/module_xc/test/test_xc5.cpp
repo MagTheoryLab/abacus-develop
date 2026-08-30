@@ -720,6 +720,32 @@ TEST(GgaGradVxc, LibxcContinuousB2IsRejected)
     EXPECT_THROW(run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 3), std::domain_error);
 }
 
+// The low-level LibXC entry point is public and can be called without going
+// through XC_Functional::v_xc. It must enforce the same method-3 boundary.
+TEST(GgaGradVxc, LibxcLowLevelContinuousB2IsRejected)
+{
+    Ns4Charge mock(0);
+    const std::vector<int> func_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
+    const auto run_low_level = [&](const int gga_grad)
+    {
+        return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                               gga_grad_nrxx,
+                                               mock.ucell.omega,
+                                               mock.ucell.tpiba,
+                                               &mock.chr,
+                                               4,
+                                               true,
+                                               false,
+                                               gga_grad,
+                                               nullptr,
+                                               0.0,
+                                               0.0);
+    };
+
+    EXPECT_NO_THROW(run_low_level(2));
+    EXPECT_THROW(run_low_level(3), std::domain_error);
+}
+
 // for LIBXC, gga_grad=0 and 1 both keep the original collinear algorithm
 TEST(GgaGradVxc, LibxcZeroEqualsOne)
 {

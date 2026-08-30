@@ -13,6 +13,7 @@
 
 #include <xc.h>
 
+#include <stdexcept>
 #include <vector>
 #include <complex>
 
@@ -69,6 +70,14 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         }
         return false;
     }();
+
+    if (is_gga && nspin_in == 4 && has_mag && gga_grad == 3)
+    {
+        XC_Functional_Libxc::finish_func(funcs);
+        ModuleBase::timer::end("XC_Functional_Libxc", "v_xc_libxc");
+        throw std::domain_error(
+            "gga_grad=3 continuous noncollinear GGA is not implemented for LIBXC functionals");
+    }
 
     // converting rho
     // For nspin=4, the charge density has 4 components:

@@ -1,6 +1,7 @@
 #include "../xc_functional.h"
 #include "../xc_functional_ncgga_sf.h"
 #include "../libxc_abacus.h"
+#include "../xc_ncgga_radial.h"
 
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
@@ -18,8 +19,12 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <string>
+#include <tuple>
 #include <vector>
 
 // This focused target does not link the full elecstate object library. The
@@ -78,8 +83,26 @@ bool is_pool_root()
 class RealPwNcgga : public testing::Test
 {
   protected:
+    typedef std::tuple<double, double, ModuleBase::matrix> VxcResult;
+    typedef std::function<VxcResult()> Evaluator;
+
+    struct BranchMargins
+    {
+        double min_abs_total_density;
+        double min_signed_saturation_gap;
+        double max_signed_saturation_gap;
+        double min_magnitude;
+        double max_magnitude;
+        double min_eta_distance;
+    };
+
     ModulePW::PW_Basis pw;
+    Charge charge;
+    std::array<std::vector<double>, 4> density;
     std::array<std::vector<double>, 4> perturbation;
+    std::array<double*, 4> density_pointer;
+    std::vector<double> core_density;
+    std::vector<std::complex<double>> core_density_reciprocal;
 
     void SetUp() override
     {
@@ -113,8 +136,22 @@ class RealPwNcgga : public testing::Test
 
         for (int channel = 0; channel < 4; ++channel)
         {
+            density[channel].resize(pw.nrxx);
             perturbation[channel].resize(pw.nrxx);
+            density_pointer[channel] = density[channel].data();
         }
+        core_density.resize(pw.nrxx);
+        core_density_reciprocal.resize(pw.npw);
+
+        charge.rhopw = &pw;
+        charge.nrxx = pw.nrxx;
+        charge.nxyz = pw.nxyz;
+        charge.ngmc = pw.npw;
+        charge.nspin = 4;
+        charge.rho = density_pointer.data();
+        charge.rho_core = core_density.data();
+        charge.rhog_core = core_density_reciprocal.data();
+
         for (int ir = 0; ir < pw.nrxx; ++ir)
         {
             // PW_Basis stores local real data as
@@ -125,6 +162,35 @@ class RealPwNcgga : public testing::Test
             const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
             const double y = ModuleBase::TWO_PI * static_cast<double>(iy) / pw.ny;
             const double z = ModuleBase::TWO_PI * static_cast<double>(iz) / pw.nz;
+            const double total_density = 2.2
+                                         + 0.18 * std::sin(x + 0.21)
+                                         + 0.13 * std::cos(4.0 * x - 0.17)
+                                         + 0.07 * std::sin(8.0 * x + 0.33)
+                                         + 0.05 * std::cos(y - 0.26)
+                                         + 0.04 * std::sin(z + 0.31);
+            const double magnitude = 0.62
+                                     + 0.07 * std::cos(2.0 * x + 0.13)
+                                     + 0.05 * std::sin(5.0 * x - 0.27)
+                                     + 0.03 * std::sin(y + 0.19)
+                                     + 0.02 * std::cos(z - 0.23);
+            const double theta = 0.7
+                                 + 0.32 * std::sin(3.0 * x + 0.11)
+                                 + 0.18 * std::cos(7.0 * x - 0.23)
+                                 + 0.10 * std::cos(y + 0.17)
+                                 + 0.07 * std::sin(z - 0.29);
+            const double phi = 0.4
+                               + 0.27 * std::cos(4.0 * x + 0.37)
+                               - 0.16 * std::sin(6.0 * x + 0.29)
+                               + 0.09 * std::sin(y + z + 0.15);
+            density[0][ir] = total_density;
+            density[1][ir] = magnitude * std::sin(theta) * std::cos(phi);
+            density[2][ir] = magnitude * std::sin(theta) * std::sin(phi);
+            density[3][ir] = magnitude * std::cos(theta);
+            core_density[ir] = 0.15
+                               + 0.03 * std::cos(3.0 * x - 0.14)
+                               + 0.02 * std::sin(6.0 * x + 0.25)
+                               + 0.01 * std::cos(y - z + 0.18);
+
             perturbation[0][ir] = 0.31 * std::cos(2.0 * x + 0.41)
                                       - 0.19 * std::sin(7.0 * x - 0.12)
                                       + 0.11 * std::cos(y + z - 0.16);
@@ -138,6 +204,479 @@ class RealPwNcgga : public testing::Test
                                       + 0.23 * std::cos(7.0 * x - 0.29)
                                       + 0.10 * std::sin(y - z + 0.32);
         }
+        pw.real2recip(core_density.data(), core_density_reciprocal.data());
+    }
+
+    VxcResult evaluate_builtin(const int gga_grad, const std::string& functional = "PBE")
+    {
+        XC_Functional::set_xc_type(functional);
+        return ModuleXC::NCGGA_SF_Builtin::v_xc_ncgga_sf_builtin(
+            pw.nrxx, pw.omega, pw.tpiba, &charge, gga_grad);
+    }
+
+    void set_uniform_state(const double total_density,
+                           const std::array<double, 3>& magnetization)
+    {
+        const std::array<double, 4> constant_direction
+            = {{0.17, -0.11, 0.13, 0.09}};
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            density[0][ir] = total_density;
+            for (int mu = 0; mu < 3; ++mu)
+            {
+                density[mu + 1][ir] = magnetization[mu];
+            }
+            core_density[ir] = 0.0;
+            for (int channel = 0; channel < 4; ++channel)
+            {
+                perturbation[channel][ir] += constant_direction[channel];
+            }
+        }
+        std::fill(core_density_reciprocal.begin(),
+                  core_density_reciprocal.end(),
+                  std::complex<double>(0.0, 0.0));
+    }
+
+    void set_inside_eta_state()
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const int ix = ir / (pw.ny * pw.nplane);
+            const int iy = (ir / pw.nplane) % pw.ny;
+            const int iz = ir % pw.nplane + pw.startz_current;
+            const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
+            const double y = ModuleBase::TWO_PI * static_cast<double>(iy) / pw.ny;
+            const double z = ModuleBase::TWO_PI * static_cast<double>(iz) / pw.nz;
+            density[0][ir] = 0.030 + 0.002 * std::cos(x - y + 0.2);
+            density[1][ir] = 2.8e-4 + 0.6e-4 * std::sin(2.0 * x + 0.1);
+            density[2][ir] = -2.1e-4 + 0.5e-4 * std::cos(3.0 * x - z + 0.3);
+            density[3][ir] = 1.7e-4 + 0.4e-4 * std::sin(y + z - 0.2);
+            core_density[ir] = 0.004 + 0.001 * std::cos(2.0 * x + z - 0.1);
+            perturbation[0][ir] += 0.07;
+            perturbation[1][ir] += 0.13;
+            perturbation[2][ir] -= 0.11;
+            perturbation[3][ir] += 0.09;
+        }
+        pw.real2recip(core_density.data(), core_density_reciprocal.data());
+    }
+
+    void set_negative_gga_state()
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const int ix = ir / (pw.ny * pw.nplane);
+            const int iy = (ir / pw.nplane) % pw.ny;
+            const int iz = ir % pw.nplane + pw.startz_current;
+            const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
+            const double y = ModuleBase::TWO_PI * static_cast<double>(iy) / pw.ny;
+            const double z = ModuleBase::TWO_PI * static_cast<double>(iz) / pw.nz;
+            density[0][ir] = -1.55 - 0.10 * std::cos(x - y + 0.2)
+                                      - 0.05 * std::sin(3.0 * x + z - 0.1);
+            density[1][ir] = 0.30 + 0.05 * std::sin(2.0 * x + 0.1);
+            density[2][ir] = -0.24 + 0.04 * std::cos(3.0 * x - z + 0.3);
+            density[3][ir] = 0.20 + 0.03 * std::sin(y + z - 0.2);
+            core_density[ir] = -0.12 - 0.02 * std::cos(2.0 * x + z - 0.1);
+        }
+        pw.real2recip(core_density.data(), core_density_reciprocal.data());
+    }
+
+    void set_saturated_gga_state()
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const int ix = ir / (pw.ny * pw.nplane);
+            const int iy = (ir / pw.nplane) % pw.ny;
+            const int iz = ir % pw.nplane + pw.startz_current;
+            const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
+            const double y = ModuleBase::TWO_PI * static_cast<double>(iy) / pw.ny;
+            const double z = ModuleBase::TWO_PI * static_cast<double>(iz) / pw.nz;
+            density[0][ir] = 0.43 + 0.04 * std::cos(x - y + 0.2)
+                                  + 0.02 * std::sin(3.0 * x + z - 0.1);
+            density[1][ir] = 0.64 + 0.06 * std::sin(2.0 * x + 0.1);
+            density[2][ir] = 0.34 + 0.05 * std::cos(3.0 * x - z + 0.3);
+            density[3][ir] = 0.28 + 0.04 * std::sin(y + z - 0.2);
+            core_density[ir] = 0.05 + 0.01 * std::cos(2.0 * x + z - 0.1);
+        }
+        pw.real2recip(core_density.data(), core_density_reciprocal.data());
+    }
+
+    BranchMargins report_branch_margins(const std::string& mode)
+    {
+        constexpr double lca_eta = 1.0e-3;
+        double local_min_abs_density = std::numeric_limits<double>::max();
+        double local_min_gap = std::numeric_limits<double>::max();
+        double local_max_gap = -std::numeric_limits<double>::max();
+        double local_min_magnitude = std::numeric_limits<double>::max();
+        double local_max_magnitude = 0.0;
+        double local_min_eta_distance = std::numeric_limits<double>::max();
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const double total = density[0][ir] + core_density[ir];
+            const double magnitude
+                = std::sqrt(density[1][ir] * density[1][ir]
+                            + density[2][ir] * density[2][ir]
+                            + density[3][ir] * density[3][ir]);
+            const ModuleXC::NcggaRadialPoint radial
+                = ModuleXC::make_ncgga_radial_point(
+                    {{density[1][ir], density[2][ir], density[3][ir]}},
+                    lca_eta);
+            const double gap = std::abs(total) - radial.value;
+            local_min_abs_density
+                = std::min(local_min_abs_density, std::abs(total));
+            local_min_gap = std::min(local_min_gap, gap);
+            local_max_gap = std::max(local_max_gap, gap);
+            local_min_magnitude = std::min(local_min_magnitude, magnitude);
+            local_max_magnitude = std::max(local_max_magnitude, magnitude);
+            local_min_eta_distance
+                = std::min(local_min_eta_distance, std::abs(magnitude - lca_eta));
+        }
+        BranchMargins margins;
+        margins.min_abs_total_density = pool_min(local_min_abs_density);
+        margins.min_signed_saturation_gap = pool_min(local_min_gap);
+        margins.max_signed_saturation_gap = pool_max(local_max_gap);
+        margins.min_magnitude = pool_min(local_min_magnitude);
+        margins.max_magnitude = pool_max(local_max_magnitude);
+        margins.min_eta_distance = pool_min(local_min_eta_distance);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_BRANCH mode=" << mode
+                      << " min_abs_total_density=" << margins.min_abs_total_density
+                      << " min_signed_saturation_gap="
+                      << margins.min_signed_saturation_gap
+                      << " max_signed_saturation_gap="
+                      << margins.max_signed_saturation_gap
+                      << " min_magnitude=" << margins.min_magnitude
+                      << " max_magnitude=" << margins.max_magnitude
+                      << " min_eta_distance=" << margins.min_eta_distance << '\n';
+        }
+        return margins;
+    }
+
+    void expect_vtxc_matches_returned_potential(const std::string& mode,
+                                                const Evaluator& evaluate)
+    {
+        const VxcResult result = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(result);
+        double local_inner_product = 0.0;
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                local_inner_product += potential(channel, ir) * density[channel][ir];
+            }
+        }
+        const double direct
+            = pw.omega / pw.nxyz * pool_sum(local_inner_product);
+        const double reported = std::get<1>(result);
+        const double scale = std::max(1.0, std::max(std::abs(reported), std::abs(direct)));
+        EXPECT_NEAR(reported, direct, 2.0e-12 * scale);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_VTXC mode=" << mode
+                      << " reported=" << reported
+                      << " direct=" << direct
+                      << " absolute_error=" << std::abs(reported - direct) << '\n';
+        }
+    }
+
+    void expect_directional_derivatives_at_steps(
+        const std::string& mode,
+        const Evaluator& evaluate,
+        const std::vector<double>& eps_values)
+    {
+        ASSERT_GE(eps_values.size(), 3U);
+        const VxcResult base = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(base);
+        ASSERT_EQ(potential.nr, 4);
+        ASSERT_EQ(potential.nc, pw.nrxx);
+
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            SCOPED_TRACE(std::string("density channel ") + std::to_string(channel));
+            double local_analytic = 0.0;
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                local_analytic += potential(channel, ir) * perturbation[channel][ir];
+            }
+            const double analytic
+                = pw.omega / pw.nxyz * pool_sum(local_analytic);
+            std::vector<double> finite_difference(eps_values.size(), 0.0);
+            std::vector<double> errors(eps_values.size(), 0.0);
+
+            for (std::size_t ieps = 0; ieps < eps_values.size(); ++ieps)
+            {
+                const double eps = eps_values[ieps];
+                for (int ir = 0; ir < pw.nrxx; ++ir)
+                {
+                    density[channel][ir] += eps * perturbation[channel][ir];
+                }
+                const double energy_plus = std::get<0>(evaluate());
+                for (int ir = 0; ir < pw.nrxx; ++ir)
+                {
+                    density[channel][ir] -= 2.0 * eps * perturbation[channel][ir];
+                }
+                const double energy_minus = std::get<0>(evaluate());
+                for (int ir = 0; ir < pw.nrxx; ++ir)
+                {
+                    density[channel][ir] += eps * perturbation[channel][ir];
+                }
+                finite_difference[ieps]
+                    = (energy_plus - energy_minus) / (2.0 * eps);
+                errors[ieps] = std::abs(finite_difference[ieps] - analytic);
+            }
+
+            const double scale
+                = std::max(1.0,
+                           std::max(std::abs(analytic),
+                                    std::abs(finite_difference.back())));
+            EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
+            EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
+            EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
+            if (is_pool_root())
+            {
+                for (std::size_t ieps = 0; ieps < eps_values.size(); ++ieps)
+                {
+                    const double relative_scale
+                        = std::max(1.0e-30,
+                                   std::max(std::abs(analytic),
+                                            std::abs(finite_difference[ieps])));
+                    const double order
+                        = ieps == 0 || errors[ieps] == 0.0
+                              ? 0.0
+                              : std::log(errors[ieps - 1] / errors[ieps])
+                                    / std::log(2.0);
+                    std::cout << std::setprecision(17)
+                              << "NCGGA_FD mode=" << mode
+                              << " channel=" << channel
+                              << " eps=" << eps_values[ieps]
+                              << " analytic=" << analytic
+                              << " finite_difference=" << finite_difference[ieps]
+                              << " absolute_error=" << errors[ieps]
+                              << " relative_error=" << errors[ieps] / relative_scale
+                              << " convergence_order=" << order << '\n';
+                }
+            }
+        }
+    }
+
+    void expect_core_directional_derivative(const std::string& mode,
+                                             const Evaluator& evaluate)
+    {
+        const VxcResult base = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(base);
+        double local_analytic = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_analytic += potential(0, ir) * perturbation[0][ir];
+        }
+        const double analytic = pw.omega / pw.nxyz * pool_sum(local_analytic);
+        const std::array<double, 4> eps_values
+            = {{1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3}};
+        std::array<double, 4> errors = {{0.0, 0.0, 0.0, 0.0}};
+
+        for (int ieps = 0; ieps < 4; ++ieps)
+        {
+            const double eps = eps_values[ieps];
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir] += eps * perturbation[0][ir];
+            }
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double energy_plus = std::get<0>(evaluate());
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir] -= 2.0 * eps * perturbation[0][ir];
+            }
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double energy_minus = std::get<0>(evaluate());
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir] += eps * perturbation[0][ir];
+            }
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double finite_difference
+                = (energy_plus - energy_minus) / (2.0 * eps);
+            errors[ieps] = std::abs(finite_difference - analytic);
+            if (is_pool_root())
+            {
+                std::cout << std::setprecision(17)
+                          << "NCGGA_CORE_FD mode=" << mode
+                          << " eps=" << eps
+                          << " analytic=" << analytic
+                          << " finite_difference=" << finite_difference
+                          << " absolute_error=" << errors[ieps] << '\n';
+            }
+        }
+        const double scale = std::max(1.0, std::abs(analytic));
+        EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
+        EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
+        EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
+    }
+
+    void expect_core_translation_force(const std::string& mode,
+                                       const Evaluator& evaluate)
+    {
+        const VxcResult base = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(base);
+        std::vector<std::complex<double>> reciprocal(pw.npw);
+        std::vector<ModuleBase::Vector3<double>> core_gradient(pw.nrxx);
+        pw.real2recip(core_density.data(), reciprocal.data());
+        XC_Functional::grad_rho(
+            reciprocal.data(), core_gradient.data(), &pw, pw.tpiba);
+        double local_analytic = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_analytic += potential(0, ir) * core_gradient[ir].x;
+        }
+        const double analytic_force
+            = pw.omega / pw.nxyz * pool_sum(local_analytic);
+        const std::vector<double> original_core = core_density;
+        const std::array<double, 4> eps_values
+            = {{2.0e-2, 1.0e-2, 5.0e-3, 2.5e-3}};
+        std::array<double, 4> errors = {{0.0, 0.0, 0.0, 0.0}};
+        for (int ieps = 0; ieps < 4; ++ieps)
+        {
+            const double eps = eps_values[ieps];
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir]
+                    = original_core[ir] - eps * core_gradient[ir].x;
+            }
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double energy_plus = std::get<0>(evaluate());
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir]
+                    = original_core[ir] + eps * core_gradient[ir].x;
+            }
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double energy_minus = std::get<0>(evaluate());
+            std::copy(original_core.begin(), original_core.end(), core_density.begin());
+            pw.real2recip(core_density.data(), core_density_reciprocal.data());
+            const double finite_difference_force
+                = -(energy_plus - energy_minus) / (2.0 * eps);
+            errors[ieps] = std::abs(finite_difference_force - analytic_force);
+            if (is_pool_root())
+            {
+                std::cout << std::setprecision(17)
+                          << "NCGGA_CORE_FORCE_FD mode=" << mode
+                          << " eps=" << eps
+                          << " analytic=" << analytic_force
+                          << " finite_difference=" << finite_difference_force
+                          << " absolute_error=" << errors[ieps] << '\n';
+            }
+        }
+        const double scale = std::max(1.0, std::abs(analytic_force));
+        EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
+        EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
+        EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
+    }
+
+    void expect_core_repartition_invariance(const Evaluator& evaluate)
+    {
+        const VxcResult original = evaluate();
+        const ModuleBase::matrix original_potential = std::get<2>(original);
+        double local_expected_vtxc_change = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const double transfer = 0.04 * perturbation[0][ir];
+            density[0][ir] += transfer;
+            core_density[ir] -= transfer;
+            local_expected_vtxc_change += original_potential(0, ir) * transfer;
+        }
+        pw.real2recip(core_density.data(), core_density_reciprocal.data());
+        const VxcResult repartitioned = evaluate();
+        const ModuleBase::matrix& repartitioned_potential = std::get<2>(repartitioned);
+        EXPECT_NEAR(std::get<0>(original), std::get<0>(repartitioned),
+                    5.0e-11 * std::max(1.0, std::abs(std::get<0>(original))));
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                EXPECT_NEAR(repartitioned_potential(channel, ir),
+                            original_potential(channel, ir),
+                            8.0e-11
+                                * std::max(1.0,
+                                           std::abs(original_potential(channel, ir))));
+            }
+        }
+        const double expected_vtxc_change
+            = pw.omega / pw.nxyz * pool_sum(local_expected_vtxc_change);
+        const double actual_vtxc_change
+            = std::get<1>(repartitioned) - std::get<1>(original);
+        EXPECT_NEAR(actual_vtxc_change,
+                    expected_vtxc_change,
+                    8.0e-11 * std::max(1.0, std::abs(expected_vtxc_change)));
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_CORE_REPARTITION expected_vtxc_change="
+                      << expected_vtxc_change
+                      << " actual_vtxc_change=" << actual_vtxc_change << '\n';
+        }
+    }
+
+    void expect_local_rotation_torque(const std::string& mode,
+                                      const Evaluator& evaluate)
+    {
+        const VxcResult base = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(base);
+        const std::vector<double> original_mx = density[1];
+        const std::vector<double> original_my = density[2];
+        double local_analytic = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_analytic += perturbation[0][ir]
+                              * (potential(2, ir) * original_mx[ir]
+                                 - potential(1, ir) * original_my[ir]);
+        }
+        const double analytic = pw.omega / pw.nxyz * pool_sum(local_analytic);
+        const std::array<double, 4> eps_values
+            = {{1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3}};
+        std::array<double, 4> errors = {{0.0, 0.0, 0.0, 0.0}};
+
+        for (int ieps = 0; ieps < 4; ++ieps)
+        {
+            const double eps = eps_values[ieps];
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                const double angle = eps * perturbation[0][ir];
+                density[1][ir] = std::cos(angle) * original_mx[ir]
+                                 - std::sin(angle) * original_my[ir];
+                density[2][ir] = std::sin(angle) * original_mx[ir]
+                                 + std::cos(angle) * original_my[ir];
+            }
+            const double energy_plus = std::get<0>(evaluate());
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                const double angle = -eps * perturbation[0][ir];
+                density[1][ir] = std::cos(angle) * original_mx[ir]
+                                 - std::sin(angle) * original_my[ir];
+                density[2][ir] = std::sin(angle) * original_mx[ir]
+                                 + std::cos(angle) * original_my[ir];
+            }
+            const double energy_minus = std::get<0>(evaluate());
+            std::copy(original_mx.begin(), original_mx.end(), density[1].begin());
+            std::copy(original_my.begin(), original_my.end(), density[2].begin());
+            const double finite_difference
+                = (energy_plus - energy_minus) / (2.0 * eps);
+            errors[ieps] = std::abs(finite_difference - analytic);
+            if (is_pool_root())
+            {
+                std::cout << std::setprecision(17)
+                          << "NCGGA_TORQUE_FD mode=" << mode
+                          << " eps=" << eps
+                          << " analytic=" << analytic
+                          << " finite_difference=" << finite_difference
+                          << " absolute_error=" << errors[ieps] << '\n';
+            }
+        }
+        const double scale = std::max(1.0, std::abs(analytic));
+        EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
+        EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
+        EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
     }
 };
 
@@ -206,6 +745,164 @@ TEST_F(RealPwNcgga, GradAndDivAreNegativeAdjoints)
                   << " norm=" << norm
                   << " scaled_error=" << std::abs(identity) / norm << '\n';
     }
+}
+
+TEST_F(RealPwNcgga, ProjectedLcaGraphRequiresDiscreteFluxReverse)
+{
+    // This eta is the documented gga_grad=2 policy.  Keep it local so the
+    // identical test-only patch compiles on the behavior commit's parent.
+    constexpr double lca_eta = 1.0e-3;
+    typedef std::array<std::vector<ModuleBase::Vector3<double>>, 3> Gradients;
+
+    const auto gradients = [&]()
+    {
+        Gradients result;
+        std::vector<std::complex<double>> reciprocal(pw.npw);
+        for (int mu = 0; mu < 3; ++mu)
+        {
+            result[mu].resize(pw.nrxx);
+            pw.real2recip(density[mu + 1].data(), reciprocal.data());
+            XC_Functional::grad_rho(
+                reciprocal.data(), result[mu].data(), &pw, pw.tpiba);
+        }
+        return result;
+    };
+
+    const auto graph_energy = [&]()
+    {
+        const Gradients grad_m = gradients();
+        double local_energy = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const std::array<double, 3> magnetization
+                = {{density[1][ir], density[2][ir], density[3][ir]}};
+            const ModuleXC::NcggaRadialPoint radial
+                = ModuleXC::make_ncgga_radial_point(magnetization, lca_eta);
+            ModuleBase::Vector3<double> projected;
+            for (int nu = 0; nu < 3; ++nu)
+            {
+                projected += radial.gradient[nu] * grad_m[nu][ir];
+            }
+            local_energy += 0.5 * (projected * projected);
+        }
+        return pw.omega / pw.nxyz * pool_sum(local_energy);
+    };
+
+    const Gradients grad_m = gradients();
+    std::vector<ModuleBase::Vector3<double>> projected(pw.nrxx);
+    std::array<std::vector<double>, 3> exact_potential;
+    std::array<std::vector<double>, 3> old_surrogate;
+    std::vector<double> projected_divergence(pw.nrxx);
+    std::vector<ModuleBase::Vector3<double>> flux(pw.nrxx);
+    std::vector<double> divergence(pw.nrxx);
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        exact_potential[mu].resize(pw.nrxx);
+        old_surrogate[mu].resize(pw.nrxx);
+    }
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        const std::array<double, 3> magnetization
+            = {{density[1][ir], density[2][ir], density[3][ir]}};
+        const ModuleXC::NcggaRadialPoint radial
+            = ModuleXC::make_ncgga_radial_point(magnetization, lca_eta);
+        for (int nu = 0; nu < 3; ++nu)
+        {
+            projected[ir] += radial.gradient[nu] * grad_m[nu][ir];
+        }
+    }
+    XC_Functional::grad_dot(
+        projected.data(), projected_divergence.data(), &pw, pw.tpiba);
+
+    double maximum_surrogate_error = 0.0;
+    double maximum_exact_error = 0.0;
+    const std::array<double, 5> eps_values
+        = {{1.0e-3, 5.0e-4, 2.5e-4, 1.25e-4, 6.25e-5}};
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const std::array<double, 3> magnetization
+                = {{density[1][ir], density[2][ir], density[3][ir]}};
+            const ModuleXC::NcggaRadialPoint radial
+                = ModuleXC::make_ncgga_radial_point(magnetization, lca_eta);
+            flux[ir] = radial.gradient[mu] * projected[ir];
+        }
+        XC_Functional::grad_dot(flux.data(), divergence.data(), &pw, pw.tpiba);
+
+        double local_exact_projection = 0.0;
+        double local_surrogate_projection = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const std::array<double, 3> magnetization
+                = {{density[1][ir], density[2][ir], density[3][ir]}};
+            const ModuleXC::NcggaRadialPoint radial
+                = ModuleXC::make_ncgga_radial_point(magnetization, lca_eta);
+            double local_response = 0.0;
+            for (int nu = 0; nu < 3; ++nu)
+            {
+                local_response += radial.jacobian(nu, mu)
+                                  * (projected[ir] * grad_m[nu][ir]);
+            }
+            exact_potential[mu][ir] = local_response - divergence[ir];
+            old_surrogate[mu][ir]
+                = -radial.gradient[mu] * projected_divergence[ir];
+            local_exact_projection
+                += exact_potential[mu][ir] * perturbation[mu + 1][ir];
+            local_surrogate_projection
+                += old_surrogate[mu][ir] * perturbation[mu + 1][ir];
+        }
+        const double exact
+            = pw.omega / pw.nxyz * pool_sum(local_exact_projection);
+        const double surrogate
+            = pw.omega / pw.nxyz * pool_sum(local_surrogate_projection);
+
+        std::array<double, 5> exact_errors = {{0.0, 0.0, 0.0, 0.0, 0.0}};
+        std::array<double, 5> surrogate_errors = {{0.0, 0.0, 0.0, 0.0, 0.0}};
+        for (int ieps = 0; ieps < 5; ++ieps)
+        {
+            const double eps = eps_values[ieps];
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                density[mu + 1][ir] += eps * perturbation[mu + 1][ir];
+            }
+            const double energy_plus = graph_energy();
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                density[mu + 1][ir] -= 2.0 * eps * perturbation[mu + 1][ir];
+            }
+            const double energy_minus = graph_energy();
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                density[mu + 1][ir] += eps * perturbation[mu + 1][ir];
+            }
+            const double finite_difference
+                = (energy_plus - energy_minus) / (2.0 * eps);
+            exact_errors[ieps] = std::abs(exact - finite_difference);
+            surrogate_errors[ieps] = std::abs(surrogate - finite_difference);
+            maximum_exact_error = std::max(maximum_exact_error, exact_errors[ieps]);
+            maximum_surrogate_error
+                = std::max(maximum_surrogate_error, surrogate_errors[ieps]);
+            if (is_pool_root())
+            {
+                std::cout << std::setprecision(17)
+                          << "NCGGA_PROJECTED_REVERSE channel=" << mu + 1
+                          << " eps=" << eps
+                          << " exact=" << exact
+                          << " old_surrogate=" << surrogate
+                          << " finite_difference=" << finite_difference
+                          << " exact_error=" << exact_errors[ieps]
+                          << " surrogate_error=" << surrogate_errors[ieps] << '\n';
+            }
+        }
+        const double scale
+            = std::max(1.0, std::max(std::abs(exact), std::abs(surrogate)));
+        EXPECT_LE(*std::min_element(exact_errors.begin(), exact_errors.end()),
+                  2.0e-8 * scale);
+        EXPECT_GT(*std::min_element(surrogate_errors.begin(), surrogate_errors.end()),
+                  2.0e-7 * scale);
+    }
+    EXPECT_GT(maximum_surrogate_error, 100.0 * maximum_exact_error);
 }
 
 #ifdef __LIBXC
@@ -337,6 +1034,180 @@ TEST_F(RealPwNcgga, LibxcOrdinaryGgaSigmaFloorDifferentiatesTheWeightedEnergy)
 }
 #endif
 
+TEST_F(RealPwNcgga, BuiltinGgaGrad2VtxcEqualsFinalValencePotentialInnerProduct)
+{
+    expect_vtxc_matches_returned_potential(
+        "smooth", [this]() { return evaluate_builtin(2); });
+
+    set_negative_gga_state();
+    expect_vtxc_matches_returned_potential(
+        "negative", [this]() { return evaluate_builtin(2); });
+
+    set_saturated_gga_state();
+    expect_vtxc_matches_returned_potential(
+        "saturated", [this]() { return evaluate_builtin(2); });
+
+    set_inside_eta_state();
+    expect_vtxc_matches_returned_potential(
+        "inside_eta", [this]() { return evaluate_builtin(2); });
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2IsDiscreteGradientOnSmoothProjectedBranch)
+{
+    const BranchMargins margins = report_branch_margins("smooth");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    EXPECT_GT(margins.min_eta_distance, 0.3);
+    expect_directional_derivatives_at_steps(
+        "builtin_gga2_smooth",
+        [this]() { return evaluate_builtin(2); },
+        {1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2IsDiscreteGradientInsideRadialEta)
+{
+    set_inside_eta_state();
+    const BranchMargins margins = report_branch_margins("inside_eta");
+    EXPECT_GT(margins.min_abs_total_density, 0.025);
+    EXPECT_LT(margins.max_magnitude, 6.0e-4);
+    EXPECT_GT(margins.min_eta_distance, 4.0e-4);
+    expect_directional_derivatives_at_steps(
+        "builtin_gga2_inside_eta",
+        [this]() { return evaluate_builtin(2); },
+        {2.0e-4, 1.0e-4, 5.0e-5, 2.5e-5,
+         1.25e-5, 6.25e-6, 3.125e-6, 1.5625e-6,
+         7.8125e-7, 3.90625e-7});
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2DifferentiatesNegativeDensityBranch)
+{
+    set_negative_gga_state();
+    const BranchMargins margins = report_branch_margins("negative");
+    EXPECT_GT(margins.min_abs_total_density, 1.3);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_directional_derivatives_at_steps(
+        "builtin_gga2_negative",
+        [this]() { return evaluate_builtin(2); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2DifferentiatesSaturatedGgaBranch)
+{
+    set_saturated_gga_state();
+    const BranchMargins margins = report_branch_margins("saturated");
+    EXPECT_LT(margins.max_signed_saturation_gap, -0.1);
+    expect_directional_derivatives_at_steps(
+        "builtin_gga2_saturated_gga",
+        [this]() { return evaluate_builtin(2); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, BuiltinLdaGgaGrad2DifferentiatesLocalMapBranches)
+{
+    set_uniform_state(-1.4, {{0.20, -0.16, 0.18}});
+    expect_directional_derivatives_at_steps(
+        "builtin_lda_gga2_negative",
+        [this]() { return evaluate_builtin(2, "PZ"); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+
+    set_uniform_state(0.45, {{0.65, 0.30, 0.20}});
+    expect_directional_derivatives_at_steps(
+        "builtin_lda_gga2_saturated",
+        [this]() { return evaluate_builtin(2, "PZ"); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2DifferentiatesCoreDensityAndLocalRotation)
+{
+    expect_core_directional_derivative(
+        "builtin_gga2_core", [this]() { return evaluate_builtin(2); });
+    expect_core_translation_force(
+        "builtin_gga2_core_translation", [this]() { return evaluate_builtin(2); });
+    expect_local_rotation_torque(
+        "builtin_gga2_rotation", [this]() { return evaluate_builtin(2); });
+    expect_core_repartition_invariance(
+        [this]() { return evaluate_builtin(2); });
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2RespectsSpinSymmetriesAndZeroLimit)
+{
+    const VxcResult original = evaluate_builtin(2);
+    const ModuleBase::matrix original_potential = std::get<2>(original);
+    for (int mu = 1; mu < 4; ++mu)
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            density[mu][ir] = -density[mu][ir];
+        }
+    }
+    const VxcResult inverted = evaluate_builtin(2);
+    const ModuleBase::matrix& inverted_potential = std::get<2>(inverted);
+    EXPECT_NEAR(std::get<0>(original), std::get<0>(inverted),
+                3.0e-11 * std::max(1.0, std::abs(std::get<0>(original))));
+    EXPECT_NEAR(std::get<1>(original), std::get<1>(inverted),
+                3.0e-11 * std::max(1.0, std::abs(std::get<1>(original))));
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        EXPECT_NEAR(inverted_potential(0, ir), original_potential(0, ir), 3.0e-11);
+        for (int mu = 1; mu < 4; ++mu)
+        {
+            EXPECT_NEAR(inverted_potential(mu, ir), -original_potential(mu, ir),
+                        5.0e-11 * std::max(1.0, std::abs(original_potential(mu, ir))));
+        }
+    }
+
+    for (int mu = 1; mu < 4; ++mu)
+    {
+        std::fill(density[mu].begin(), density[mu].end(), 0.0);
+    }
+    const VxcResult zero = evaluate_builtin(2);
+    EXPECT_TRUE(std::isfinite(std::get<0>(zero)));
+    EXPECT_TRUE(std::isfinite(std::get<1>(zero)));
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        EXPECT_TRUE(std::isfinite(std::get<2>(zero)(0, ir)));
+        EXPECT_DOUBLE_EQ(std::get<2>(zero)(1, ir), 0.0);
+        EXPECT_DOUBLE_EQ(std::get<2>(zero)(2, ir), 0.0);
+        EXPECT_DOUBLE_EQ(std::get<2>(zero)(3, ir), 0.0);
+    }
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2IsCovariantUnderGlobalSpinRotation)
+{
+    const VxcResult original = evaluate_builtin(2);
+    const ModuleBase::matrix original_potential = std::get<2>(original);
+    const double angle = 0.371;
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        const double mx = density[1][ir];
+        const double my = density[2][ir];
+        density[1][ir] = cosine * mx - sine * my;
+        density[2][ir] = sine * mx + cosine * my;
+    }
+    const VxcResult rotated = evaluate_builtin(2);
+    const ModuleBase::matrix& rotated_potential = std::get<2>(rotated);
+    EXPECT_NEAR(std::get<0>(original), std::get<0>(rotated),
+                3.0e-11 * std::max(1.0, std::abs(std::get<0>(original))));
+    EXPECT_NEAR(std::get<1>(original), std::get<1>(rotated),
+                3.0e-11 * std::max(1.0, std::abs(std::get<1>(original))));
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        EXPECT_NEAR(rotated_potential(0, ir), original_potential(0, ir), 3.0e-11);
+        const double expected_x
+            = cosine * original_potential(1, ir) - sine * original_potential(2, ir);
+        const double expected_y
+            = sine * original_potential(1, ir) + cosine * original_potential(2, ir);
+        EXPECT_NEAR(rotated_potential(1, ir), expected_x,
+                    5.0e-11 * std::max(1.0, std::abs(expected_x)));
+        EXPECT_NEAR(rotated_potential(2, ir), expected_y,
+                    5.0e-11 * std::max(1.0, std::abs(expected_y)));
+        EXPECT_NEAR(rotated_potential(3, ir), original_potential(3, ir),
+                    5.0e-11 * std::max(1.0, std::abs(original_potential(3, ir))));
+    }
+}
+
 TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
 {
     std::array<std::vector<double>, 4> density;
@@ -421,6 +1292,7 @@ TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
         pw.nrxx, pw.omega, pw.tpiba, &charge, 3);
     const double energy_projected = std::get<0>(projected);
     const double energy_b2 = std::get<0>(continuous_b2);
+    const double vtxc_b2 = std::get<1>(continuous_b2);
     const double energy_difference = energy_b2 - energy_projected;
     const double energy_scale
         = std::max(1.0, std::max(std::abs(energy_projected), std::abs(energy_b2)));
@@ -429,6 +1301,26 @@ TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
     EXPECT_GT(min_spin_gap, 0.90);
     EXPECT_GT(transverse_power, 1.0e-4);
     EXPECT_GT(std::abs(energy_difference), 1.0e-8 * energy_scale);
+    std::array<double, 4> local_potential_norm2 = {{0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 4> local_potential_projection = {{0.0, 0.0, 0.0, 0.0}};
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const double value = std::get<2>(continuous_b2)(channel, ir);
+            local_potential_norm2[channel] += value * value;
+            local_potential_projection[channel] += value * perturbation[channel][ir];
+        }
+    }
+    std::array<double, 4> potential_norm2 = {{0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 4> potential_projection = {{0.0, 0.0, 0.0, 0.0}};
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        potential_norm2[channel]
+            = pw.omega / pw.nxyz * pool_sum(local_potential_norm2[channel]);
+        potential_projection[channel]
+            = pw.omega / pw.nxyz * pool_sum(local_potential_projection[channel]);
+    }
     if (is_pool_root())
     {
         std::cout << std::setprecision(17)
@@ -438,6 +1330,16 @@ TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
                   << " transverse_power=" << transverse_power
                   << " min_magnitude=" << min_magnitude
                   << " min_spin_gap=" << min_spin_gap << '\n';
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_B2_FINGERPRINT"
+                      << " energy=" << energy_b2
+                      << " vtxc=" << vtxc_b2
+                      << " channel=" << channel
+                      << " potential_norm2=" << potential_norm2[channel]
+                      << " perturbation_projection=" << potential_projection[channel] << '\n';
+        }
     }
 }
 

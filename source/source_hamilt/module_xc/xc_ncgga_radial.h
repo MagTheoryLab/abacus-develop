@@ -29,6 +29,10 @@ NcggaRadialPoint make_ncgga_radial_point(
     const std::array<double, 3>& magnetization,
     const double eta);
 
+// The C2 regularization scale is part of the gga_grad=2 LCA functional, not a
+// divide-by-zero guard.  Other noncollinear modes do not inherit this policy.
+double ncgga_lca_radial_eta();
+
 struct NcggaSpinMapPoint
 {
     NcggaRadialPoint radial;

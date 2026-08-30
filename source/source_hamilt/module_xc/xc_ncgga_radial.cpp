@@ -65,6 +65,11 @@ NcggaRadialPoint make_ncgga_radial_point(
     return point;
 }
 
+double ncgga_lca_radial_eta()
+{
+    return 1.0e-3;
+}
+
 double NcggaSpinMapPoint::jacobian(const int spin, const int channel) const
 {
     if (channel == 0)

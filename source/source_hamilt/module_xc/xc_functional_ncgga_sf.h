@@ -18,7 +18,8 @@ namespace ModuleXC
 namespace NCGGA_SF_Builtin
 {
 
-// gga_grad: 2 = projected divergence of h, 3 = continuous B2 response
+// gga_grad: 2 = exact discrete reverse of the regularized projected LCA graph,
+//           3 = continuous B2 response
 std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
     const int& nrxx, const double& omega, const double tpiba, const Charge* const chr,
     const int gga_grad);

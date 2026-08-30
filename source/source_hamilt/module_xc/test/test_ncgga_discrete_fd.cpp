@@ -19,6 +19,8 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -78,6 +80,28 @@ bool is_pool_root()
 #else
     return true;
 #endif
+}
+
+std::uint64_t potential_fnv1a64(const ModuleBase::matrix& potential)
+{
+    static_assert(sizeof(double) == sizeof(std::uint64_t),
+                  "the potential hash requires 64-bit doubles");
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (int channel = 0; channel < potential.nr; ++channel)
+    {
+        for (int ir = 0; ir < potential.nc; ++ir)
+        {
+            std::uint64_t bits = 0;
+            const double value = potential(channel, ir);
+            std::memcpy(&bits, &value, sizeof(bits));
+            for (int byte = 0; byte < 8; ++byte)
+            {
+                hash ^= (bits >> (8 * byte)) & 0xffULL;
+                hash *= 1099511628211ULL;
+            }
+        }
+    }
+    return hash;
 }
 
 class RealPwNcgga : public testing::Test
@@ -358,6 +382,8 @@ class RealPwNcgga : public testing::Test
     {
         const VxcResult result = evaluate();
         const ModuleBase::matrix& potential = std::get<2>(result);
+        ASSERT_EQ(potential.nr, 4);
+        ASSERT_EQ(potential.nc, pw.nrxx);
         double local_inner_product = 0.0;
         for (int channel = 0; channel < 4; ++channel)
         {
@@ -375,9 +401,12 @@ class RealPwNcgga : public testing::Test
         {
             std::cout << std::setprecision(17)
                       << "NCGGA_VTXC mode=" << mode
+                      << " energy=" << std::get<0>(result)
                       << " reported=" << reported
                       << " direct=" << direct
-                      << " absolute_error=" << std::abs(reported - direct) << '\n';
+                      << " absolute_error=" << std::abs(reported - direct)
+                      << " potential_fnv1a64="
+                      << potential_fnv1a64(potential) << '\n';
         }
     }
 
@@ -1051,6 +1080,30 @@ TEST_F(RealPwNcgga, BuiltinGgaGrad2VtxcEqualsFinalValencePotentialInnerProduct)
     expect_vtxc_matches_returned_potential(
         "inside_eta", [this]() { return evaluate_builtin(2); });
 }
+
+#ifdef __LIBXC
+TEST_F(RealPwNcgga, LibxcGgaGrad2VtxcBookkeepingUsesFinalReturnedPotential)
+{
+    const auto evaluate = [this]()
+    {
+        const std::vector<int> functionals = {XC_LDA_X, XC_GGA_C_PBE};
+        return XC_Functional_Libxc::v_xc_libxc(functionals,
+                                               pw.nrxx,
+                                               pw.omega,
+                                               pw.tpiba,
+                                               &charge,
+                                               4,
+                                               true,
+                                               false,
+                                               2,
+                                               nullptr,
+                                               0.0,
+                                               0.0);
+    };
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_mixed", evaluate);
+}
+#endif
 
 TEST_F(RealPwNcgga, BuiltinGgaGrad2IsDiscreteGradientOnSmoothProjectedBranch)
 {

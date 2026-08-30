@@ -251,6 +251,25 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         }
     }
 
+    if (use_sf && gga_grad == 2)
+    {
+        // Define vtxc from the potential that this routine actually returns.
+        // The nonlinear core density belongs to the XC energy graph, but the
+        // electronic variational density here is the four-channel valence
+        // density stored in chr->rho.
+        vtxc = 0.0;
+        #ifdef _OPENMP
+        #pragma omp parallel for collapse(2) reduction(+:vtxc) schedule(static, 256)
+        #endif
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            for (int ir = 0; ir < nrxx; ++ir)
+            {
+                vtxc += v(channel, ir) * chr->rho[channel][ir];
+            }
+        }
+    }
+
     //-------------------------------------------------
     // for MPI, reduce the exchange-correlation energy
     //-------------------------------------------------

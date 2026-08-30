@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <stdexcept>
 
 // converting rho (abacus=>libxc)
 std::vector<double> XC_Functional_Libxc::convert_rho(
@@ -51,6 +52,192 @@ XC_Functional_Libxc::convert_rho_amag_nspin4(
 		rho[ir*nspin+1] = (arhox - amag_clip) / 2.0;
 	}
 	return std::make_tuple(std::move(rho), std::move(amag));
+}
+
+XC_Functional_Libxc::NclSfDiscreteData
+XC_Functional_Libxc::make_ncl_sf_discrete_data(
+	const std::size_t nrxx,
+	const double tpiba,
+	const Charge* const chr,
+	const bool need_gradient)
+{
+	constexpr int nspin = 2;
+	NclSfDiscreteData data;
+	data.spin_map.resize(nrxx);
+	data.rho.resize(nrxx * nspin);
+
+	#ifdef _OPENMP
+	#pragma omp parallel for schedule(static, 1024)
+	#endif
+	for (std::size_t ir = 0; ir < nrxx; ++ir)
+	{
+		const std::array<double, 3> magnetization
+			= {{chr->rho[1][ir], chr->rho[2][ir], chr->rho[3][ir]}};
+		const ModuleXC::NcggaRadialPoint radial
+			= ModuleXC::make_ncgga_radial_point(
+				magnetization, ModuleXC::ncgga_lca_radial_eta());
+		data.spin_map[ir] = ModuleXC::make_ncgga_spin_map_point(
+			chr->rho[0][ir] + chr->rho_core[ir], radial);
+		data.rho[ir * nspin] = data.spin_map[ir].spin_density[0];
+		data.rho[ir * nspin + 1] = data.spin_map[ir].spin_density[1];
+	}
+
+	if (!need_gradient)
+	{
+		return data;
+	}
+
+	std::vector<ModuleBase::Vector3<double>> grad_total(nrxx);
+	std::vector<double> real_field(nrxx);
+	std::vector<std::complex<double>> reciprocal(chr->rhopw->npw);
+	#ifdef _OPENMP
+	#pragma omp parallel for schedule(static, 1024)
+	#endif
+	for (std::size_t ir = 0; ir < nrxx; ++ir)
+	{
+		real_field[ir] = chr->rho[0][ir] + chr->rho_core[ir];
+	}
+	chr->rhopw->real2recip(real_field.data(), reciprocal.data());
+	XC_Functional::grad_rho(
+		reciprocal.data(), grad_total.data(), chr->rhopw, tpiba);
+
+	for (int mu = 0; mu < 3; ++mu)
+	{
+		data.grad_m[mu].resize(nrxx);
+		chr->rhopw->real2recip(chr->rho[mu + 1], reciprocal.data());
+		XC_Functional::grad_rho(
+			reciprocal.data(), data.grad_m[mu].data(), chr->rhopw, tpiba);
+	}
+
+	data.spin_gradient.resize(nspin);
+	for (int spin = 0; spin < nspin; ++spin)
+	{
+		data.spin_gradient[spin].resize(nrxx);
+	}
+	#ifdef _OPENMP
+	#pragma omp parallel for schedule(static, 512)
+	#endif
+	for (std::size_t ir = 0; ir < nrxx; ++ir)
+	{
+		for (int spin = 0; spin < nspin; ++spin)
+		{
+			ModuleBase::Vector3<double> gradient
+				= data.spin_map[ir].jacobian(spin, 0) * grad_total[ir];
+			for (int mu = 0; mu < 3; ++mu)
+			{
+				gradient += data.spin_map[ir].jacobian(spin, mu + 1)
+						* data.grad_m[mu][ir];
+			}
+			data.spin_gradient[spin][ir] = gradient;
+		}
+	}
+	return data;
+}
+
+ModuleBase::matrix XC_Functional_Libxc::reverse_ncl_sf_discrete(
+	const std::size_t nrxx,
+	const NclSfDiscreteData& data,
+	const std::vector<double>& drho,
+	const std::vector<double>& dsigma,
+	const double tpiba,
+	const Charge* const chr)
+{
+	constexpr int nspin = 2;
+	constexpr int nchannel = 4;
+	assert(data.spin_map.size() == nrxx);
+	assert(data.rho.size() == nrxx * nspin);
+	assert(drho.size() == nrxx * nspin);
+
+	ModuleBase::matrix potential(nchannel, nrxx);
+	#ifdef _OPENMP
+	#pragma omp parallel for schedule(static, 512)
+	#endif
+	for (std::size_t ir = 0; ir < nrxx; ++ir)
+	{
+		for (int channel = 0; channel < nchannel; ++channel)
+		{
+			potential(channel, ir)
+				= ModuleBase::e2
+				  * (data.spin_map[ir].jacobian(0, channel)
+					 * drho[ir * nspin]
+					 + data.spin_map[ir].jacobian(1, channel)
+						   * drho[ir * nspin + 1]);
+		}
+	}
+
+	if (dsigma.empty())
+	{
+		return potential;
+	}
+
+	assert(dsigma.size() == nrxx * 3);
+	assert(data.spin_gradient.size() == nspin);
+	for (int spin = 0; spin < nspin; ++spin)
+	{
+		assert(data.spin_gradient[spin].size() == nrxx);
+	}
+	for (int mu = 0; mu < 3; ++mu)
+	{
+		assert(data.grad_m[mu].size() == nrxx);
+	}
+
+	std::vector<ModuleBase::Vector3<double>> h_up(nrxx), h_down(nrxx);
+	#ifdef _OPENMP
+	#pragma omp parallel for schedule(static, 512)
+	#endif
+	for (std::size_t ir = 0; ir < nrxx; ++ir)
+	{
+		const std::size_t sigma_index = 3 * ir;
+		h_up[ir]
+			= ModuleBase::e2
+			  * (2.0 * dsigma[sigma_index] * data.spin_gradient[0][ir]
+				 + dsigma[sigma_index + 1] * data.spin_gradient[1][ir]);
+		h_down[ir]
+			= ModuleBase::e2
+			  * (2.0 * dsigma[sigma_index + 2] * data.spin_gradient[1][ir]
+				 + dsigma[sigma_index + 1] * data.spin_gradient[0][ir]);
+	}
+
+	std::vector<ModuleBase::Vector3<double>> flux(nrxx);
+	std::vector<double> divergence(nrxx);
+	for (int channel = 0; channel < nchannel; ++channel)
+	{
+		#ifdef _OPENMP
+		#pragma omp parallel for schedule(static, 512)
+		#endif
+		for (std::size_t ir = 0; ir < nrxx; ++ir)
+		{
+			flux[ir]
+				= data.spin_map[ir].jacobian(0, channel) * h_up[ir]
+				  + data.spin_map[ir].jacobian(1, channel) * h_down[ir];
+		}
+		XC_Functional::grad_dot(
+			flux.data(), divergence.data(), chr->rhopw, tpiba);
+
+		#ifdef _OPENMP
+		#pragma omp parallel for schedule(static, 512)
+		#endif
+		for (std::size_t ir = 0; ir < nrxx; ++ir)
+		{
+			potential(channel, ir) -= divergence[ir];
+			if (channel == 0 || data.spin_map[ir].saturated)
+			{
+				continue;
+			}
+
+			const ModuleBase::Vector3<double> spin_flux
+				= 0.5 * (h_up[ir] - h_down[ir]);
+			double local_response = 0.0;
+			for (int nu = 0; nu < 3; ++nu)
+			{
+				local_response
+					+= data.spin_map[ir].radial.jacobian(nu, channel - 1)
+					   * (spin_flux * data.grad_m[nu][ir]);
+			}
+			potential(channel, ir) += local_response;
+		}
+	}
+	return potential;
 }
 
 std::vector<double> XC_Functional_Libxc::compute_mag_part_nspin4(
@@ -613,6 +800,12 @@ std::vector<std::vector<double>> XC_Functional_Libxc::cal_dh_sf(
 	const double tpiba,
 	const Charge* const chr)
 {
+	if (gga_grad != 3)
+	{
+		throw std::domain_error(
+			"legacy cal_dh_sf does not implement the exact gga_grad=2 discrete reverse");
+	}
+
 	// h1/h2: functional derivative of the GGA energy density w.r.t. the
 	// spin-up/spin-down density gradients, h_s = df/d(grad rho_s):
 	//   h_up = 2*(2*vsgm(0)*sgn_up^2*gdr_up + vsgm(1)*sgn_up*sgn_dn*gdr_dn)
@@ -652,58 +845,27 @@ std::vector<std::vector<double>> XC_Functional_Libxc::cal_dh_sf(
 		dh_total[0][ir] = dh0[ir];
 	}
 
-	if (gga_grad == 2)
+	// Legacy gga_grad=3 full Scalmani-Frisch response.  The public LibXC
+	// driver rejects noncollinear gga_grad=3 GGA before reaching this helper.
+	// gga_grad=2 is reversed by reverse_ncl_sf_discrete and is rejected above
+	// so no direct caller can silently recover the disproved projection.
+	for (int mu = 1; mu < 4; ++mu)
 	{
-		// gga_grad=2 (projected method): the divergence of the magnetic part
-		// of h is projected onto m_hat BEFORE differentiating, i.e. the
-		// cross terms (h_up - h_dn) . grad(m_hat_mu) are dropped:
-		//   dh_mu = m_hat_mu * div( (h_up - h_dn)/2 )
-		// Only one divergence (of a single vector field) is needed.
+		const double* mp_mu = mag_part.data() + (mu - 1) * nrxx;
 		#ifdef _OPENMP
 		#pragma omp parallel for schedule(static, 1024)
 		#endif
 		for (std::size_t ir = 0; ir < nrxx; ++ir)
 		{
-			tmp_h[ir] = 0.5 * (h1[ir] - h2[ir]);
+			tmp_h[ir] = 0.5 * (h1[ir] - h2[ir]) * mp_mu[ir];
 		}
 		XC_Functional::grad_dot(tmp_h.data(), dh_mu.data(), chr->rhopw, tpiba);
-		for (int mu = 1; mu < 4; ++mu)
+		#ifdef _OPENMP
+		#pragma omp parallel for schedule(static, 1024)
+		#endif
+		for (std::size_t ir = 0; ir < nrxx; ++ir)
 		{
-			const double* mp_mu = mag_part.data() + (mu - 1) * nrxx;
-			#ifdef _OPENMP
-			#pragma omp parallel for schedule(static, 1024)
-			#endif
-			for (std::size_t ir = 0; ir < nrxx; ++ir)
-			{
-				dh_total[mu][ir] = mp_mu[ir] * dh_mu[ir];
-			}
-		}
-	}
-	else // gga_grad == 3
-	{
-		// gga_grad=3 (full Scalmani-Frisch): the divergence is taken AFTER
-		// multiplying by m_hat_mu, retaining the cross terms
-		// (h_up - h_dn) . grad(m_hat_mu):
-		//   dh_mu = div( (h_up - h_dn)/2 * m_hat_mu )
-		//         = m_hat_mu * div((h_up-h_dn)/2) + (h_up-h_dn)/2 . grad(m_hat_mu)
-		for (int mu = 1; mu < 4; ++mu)
-		{
-			const double* mp_mu = mag_part.data() + (mu - 1) * nrxx;
-			#ifdef _OPENMP
-			#pragma omp parallel for schedule(static, 1024)
-			#endif
-			for (std::size_t ir = 0; ir < nrxx; ++ir)
-			{
-				tmp_h[ir] = 0.5 * (h1[ir] - h2[ir]) * mp_mu[ir];
-			}
-			XC_Functional::grad_dot(tmp_h.data(), dh_mu.data(), chr->rhopw, tpiba);
-			#ifdef _OPENMP
-			#pragma omp parallel for schedule(static, 1024)
-			#endif
-			for (std::size_t ir = 0; ir < nrxx; ++ir)
-			{
-				dh_total[mu][ir] = dh_mu[ir];
-			}
+			dh_total[mu][ir] = dh_mu[ir];
 		}
 	}
 

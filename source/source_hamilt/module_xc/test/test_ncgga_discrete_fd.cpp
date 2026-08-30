@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -238,6 +239,40 @@ class RealPwNcgga : public testing::Test
             pw.nrxx, pw.omega, pw.tpiba, &charge, gga_grad);
     }
 
+#ifdef __LIBXC
+    VxcResult evaluate_libxc(
+        const std::vector<int>& functionals,
+        const std::map<int, double>* scaling_factor)
+    {
+        return XC_Functional_Libxc::v_xc_libxc(functionals,
+                                               pw.nrxx,
+                                               pw.omega,
+                                               pw.tpiba,
+                                               &charge,
+                                               4,
+                                               true,
+                                               false,
+                                               2,
+                                               scaling_factor,
+                                               0.0,
+                                               0.0);
+    }
+
+    VxcResult evaluate_libxc_gga(
+        const std::map<int, double>* scaling_factor = nullptr)
+    {
+        const std::vector<int> functionals
+            = {XC_GGA_X_PBE, XC_GGA_C_PBE};
+        return evaluate_libxc(functionals, scaling_factor);
+    }
+
+    VxcResult evaluate_libxc_lda()
+    {
+        const std::vector<int> functionals = {XC_LDA_X, XC_LDA_C_PZ};
+        return evaluate_libxc(functionals, nullptr);
+    }
+#endif
+
     void set_uniform_state(const double total_density,
                            const std::array<double, 3>& magnetization)
     {
@@ -420,6 +455,13 @@ class RealPwNcgga : public testing::Test
         const ModuleBase::matrix& potential = std::get<2>(base);
         ASSERT_EQ(potential.nr, 4);
         ASSERT_EQ(potential.nc, pw.nrxx);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_ENERGY mode=" << mode
+                      << " energy=" << std::get<0>(base)
+                      << " vtxc=" << std::get<1>(base) << '\n';
+        }
 
         for (int channel = 0; channel < 4; ++channel)
         {
@@ -706,6 +748,168 @@ class RealPwNcgga : public testing::Test
         EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
         EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
         EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
+    }
+
+    void expect_magnetization_inversion(const std::string& mode,
+                                        const Evaluator& evaluate)
+    {
+        const VxcResult original = evaluate();
+        const ModuleBase::matrix original_potential = std::get<2>(original);
+        for (int mu = 1; mu < 4; ++mu)
+        {
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                density[mu][ir] = -density[mu][ir];
+            }
+        }
+        const VxcResult inverted = evaluate();
+        const ModuleBase::matrix& inverted_potential = std::get<2>(inverted);
+
+        double local_charge_error = 0.0;
+        double local_spin_error = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_charge_error
+                = std::max(local_charge_error,
+                           std::abs(inverted_potential(0, ir)
+                                    - original_potential(0, ir)));
+            for (int mu = 1; mu < 4; ++mu)
+            {
+                local_spin_error
+                    = std::max(local_spin_error,
+                               std::abs(inverted_potential(mu, ir)
+                                        + original_potential(mu, ir)));
+            }
+        }
+        const double charge_error = pool_max(local_charge_error);
+        const double spin_error = pool_max(local_spin_error);
+        const double energy_error
+            = std::abs(std::get<0>(inverted) - std::get<0>(original));
+        const double vtxc_error
+            = std::abs(std::get<1>(inverted) - std::get<1>(original));
+        const double energy_scale
+            = std::max(1.0, std::abs(std::get<0>(original)));
+        const double vtxc_scale
+            = std::max(1.0, std::abs(std::get<1>(original)));
+        EXPECT_LE(energy_error, 3.0e-11 * energy_scale);
+        EXPECT_LE(vtxc_error, 3.0e-11 * vtxc_scale);
+        EXPECT_LE(charge_error, 5.0e-11);
+        EXPECT_LE(spin_error, 5.0e-11);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_INVERSION mode=" << mode
+                      << " energy_error=" << energy_error
+                      << " vtxc_error=" << vtxc_error
+                      << " max_charge_error=" << charge_error
+                      << " max_spin_error=" << spin_error << '\n';
+        }
+    }
+
+    void expect_global_spin_rotation_covariance(const std::string& mode,
+                                                const Evaluator& evaluate)
+    {
+        const VxcResult original = evaluate();
+        const ModuleBase::matrix original_potential = std::get<2>(original);
+        const double angle = 0.371;
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const double mx = density[1][ir];
+            const double my = density[2][ir];
+            density[1][ir] = cosine * mx - sine * my;
+            density[2][ir] = sine * mx + cosine * my;
+        }
+        const VxcResult rotated = evaluate();
+        const ModuleBase::matrix& rotated_potential = std::get<2>(rotated);
+
+        double local_charge_error = 0.0;
+        double local_spin_error = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_charge_error
+                = std::max(local_charge_error,
+                           std::abs(rotated_potential(0, ir)
+                                    - original_potential(0, ir)));
+            const double expected_x
+                = cosine * original_potential(1, ir)
+                  - sine * original_potential(2, ir);
+            const double expected_y
+                = sine * original_potential(1, ir)
+                  + cosine * original_potential(2, ir);
+            local_spin_error
+                = std::max(local_spin_error,
+                           std::abs(rotated_potential(1, ir) - expected_x));
+            local_spin_error
+                = std::max(local_spin_error,
+                           std::abs(rotated_potential(2, ir) - expected_y));
+            local_spin_error
+                = std::max(local_spin_error,
+                           std::abs(rotated_potential(3, ir)
+                                    - original_potential(3, ir)));
+        }
+        const double charge_error = pool_max(local_charge_error);
+        const double spin_error = pool_max(local_spin_error);
+        const double energy_error
+            = std::abs(std::get<0>(rotated) - std::get<0>(original));
+        const double vtxc_error
+            = std::abs(std::get<1>(rotated) - std::get<1>(original));
+        const double energy_scale
+            = std::max(1.0, std::abs(std::get<0>(original)));
+        const double vtxc_scale
+            = std::max(1.0, std::abs(std::get<1>(original)));
+        EXPECT_LE(energy_error, 3.0e-11 * energy_scale);
+        EXPECT_LE(vtxc_error, 3.0e-11 * vtxc_scale);
+        EXPECT_LE(charge_error, 5.0e-11);
+        EXPECT_LE(spin_error, 8.0e-11);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_GLOBAL_ROTATION mode=" << mode
+                      << " angle=" << angle
+                      << " energy_error=" << energy_error
+                      << " vtxc_error=" << vtxc_error
+                      << " max_charge_error=" << charge_error
+                      << " max_spin_error=" << spin_error << '\n';
+        }
+    }
+
+    void expect_zero_magnetization_is_regular(const std::string& mode,
+                                               const Evaluator& evaluate)
+    {
+        for (int mu = 1; mu < 4; ++mu)
+        {
+            std::fill(density[mu].begin(), density[mu].end(), 0.0);
+        }
+        const VxcResult result = evaluate();
+        const ModuleBase::matrix& potential = std::get<2>(result);
+        double local_maximum_spin_potential = 0.0;
+        EXPECT_TRUE(std::isfinite(std::get<0>(result)));
+        EXPECT_TRUE(std::isfinite(std::get<1>(result)));
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            EXPECT_TRUE(std::isfinite(potential(0, ir)));
+            for (int mu = 1; mu < 4; ++mu)
+            {
+                EXPECT_TRUE(std::isfinite(potential(mu, ir)));
+                local_maximum_spin_potential
+                    = std::max(local_maximum_spin_potential,
+                               std::abs(potential(mu, ir)));
+            }
+        }
+        const double maximum_spin_potential
+            = pool_max(local_maximum_spin_potential);
+        EXPECT_DOUBLE_EQ(maximum_spin_potential, 0.0);
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "NCGGA_ZERO_MAG mode=" << mode
+                      << " energy=" << std::get<0>(result)
+                      << " vtxc=" << std::get<1>(result)
+                      << " max_spin_potential=" << maximum_spin_potential
+                      << '\n';
+        }
     }
 };
 
@@ -1061,6 +1265,233 @@ TEST_F(RealPwNcgga, LibxcOrdinaryGgaSigmaFloorDifferentiatesTheWeightedEnergy)
     }
     EXPECT_LE(errors[1], 0.40 * errors[0] + 1.0e-9);
 }
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2VtxcBookkeepingUsesFinalReturnedPotential)
+{
+    const std::vector<int> functionals = {XC_LDA_X, XC_GGA_C_PBE};
+    const Evaluator evaluate = [this, &functionals]()
+    {
+        return evaluate_libxc(functionals, nullptr);
+    };
+    expect_vtxc_matches_returned_potential("libxc_gga2_mixed", evaluate);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2VtxcEqualsFinalValencePotentialInnerProduct)
+{
+    report_branch_margins("libxc_vtxc_smooth");
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_smooth", [this]() { return evaluate_libxc_gga(); });
+
+    set_negative_gga_state();
+    report_branch_margins("libxc_vtxc_negative");
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_negative", [this]() { return evaluate_libxc_gga(); });
+
+    set_saturated_gga_state();
+    report_branch_margins("libxc_vtxc_saturated");
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_saturated", [this]() { return evaluate_libxc_gga(); });
+
+    set_inside_eta_state();
+    report_branch_margins("libxc_vtxc_inside_eta");
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_inside_eta", [this]() { return evaluate_libxc_gga(); });
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2IsDiscreteGradientOnSmoothProjectedBranch)
+{
+    const BranchMargins margins = report_branch_margins("libxc_smooth");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    EXPECT_GT(margins.min_eta_distance, 0.3);
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_smooth",
+        [this]() { return evaluate_libxc_gga(); },
+        {1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2IsDiscreteGradientInsideRadialEta)
+{
+    set_inside_eta_state();
+    const BranchMargins margins = report_branch_margins("libxc_inside_eta");
+    EXPECT_GT(margins.min_abs_total_density, 0.025);
+    EXPECT_LT(margins.max_magnitude, 6.0e-4);
+    EXPECT_GT(margins.min_eta_distance, 4.0e-4);
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_inside_eta",
+        [this]() { return evaluate_libxc_gga(); },
+        {2.0e-4, 1.0e-4, 5.0e-5, 2.5e-5,
+         1.25e-5, 6.25e-6, 3.125e-6, 1.5625e-6,
+         7.8125e-7, 3.90625e-7});
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesNegativeDensityBranch)
+{
+    set_negative_gga_state();
+    const BranchMargins margins = report_branch_margins("libxc_negative");
+    EXPECT_GT(margins.min_abs_total_density, 1.3);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_negative",
+        [this]() { return evaluate_libxc_gga(); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesSaturatedGgaBranch)
+{
+    set_saturated_gga_state();
+    const BranchMargins margins = report_branch_margins("libxc_saturated");
+    EXPECT_LT(margins.max_signed_saturation_gap, -0.1);
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_saturated",
+        [this]() { return evaluate_libxc_gga(); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, LibxcLdaGgaGrad2DifferentiatesLocalMapBranches)
+{
+    set_uniform_state(-1.4, {{0.20, -0.16, 0.18}});
+    const BranchMargins negative
+        = report_branch_margins("libxc_lda_negative");
+    EXPECT_GT(negative.min_abs_total_density, 1.3);
+    EXPECT_GT(negative.min_signed_saturation_gap, 1.0);
+    expect_directional_derivatives_at_steps(
+        "libxc_lda_gga2_negative",
+        [this]() { return evaluate_libxc_lda(); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+
+    set_uniform_state(0.45, {{0.65, 0.30, 0.20}});
+    const BranchMargins saturated
+        = report_branch_margins("libxc_lda_saturated");
+    EXPECT_LT(saturated.max_signed_saturation_gap, -0.25);
+    expect_directional_derivatives_at_steps(
+        "libxc_lda_gga2_saturated",
+        [this]() { return evaluate_libxc_lda(); },
+        {5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesCoreDensityAndLocalRotation)
+{
+    const BranchMargins margins = report_branch_margins("libxc_core_rotation");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_core_directional_derivative(
+        "libxc_gga2_core", [this]() { return evaluate_libxc_gga(); });
+    expect_core_translation_force(
+        "libxc_gga2_core_translation",
+        [this]() { return evaluate_libxc_gga(); });
+    expect_local_rotation_torque(
+        "libxc_gga2_local_rotation",
+        [this]() { return evaluate_libxc_gga(); });
+    expect_core_repartition_invariance(
+        [this]() { return evaluate_libxc_gga(); });
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2RespectsSpinInversionAndZeroLimit)
+{
+    report_branch_margins("libxc_symmetry");
+    expect_magnetization_inversion(
+        "libxc_gga2", [this]() { return evaluate_libxc_gga(); });
+    expect_zero_magnetization_is_regular(
+        "libxc_gga2", [this]() { return evaluate_libxc_gga(); });
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2IsCovariantUnderGlobalSpinRotation)
+{
+    report_branch_margins("libxc_global_rotation");
+    expect_global_spin_rotation_covariance(
+        "libxc_gga2", [this]() { return evaluate_libxc_gga(); });
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesNonuniformFunctionalScaling)
+{
+    const std::map<int, double> scaling_factor
+        = {{XC_GGA_X_PBE, 0.37}, {XC_GGA_C_PBE, 1.23}};
+    const BranchMargins margins = report_branch_margins("libxc_scaled");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    if (is_pool_root())
+    {
+        std::cout << std::setprecision(17)
+                  << "LIBXC_SCALING mode=libxc_gga2_scaled"
+                  << " exchange=" << scaling_factor.at(XC_GGA_X_PBE)
+                  << " correlation=" << scaling_factor.at(XC_GGA_C_PBE)
+                  << '\n';
+    }
+    const Evaluator evaluate = [this, &scaling_factor]()
+    {
+        return evaluate_libxc_gga(&scaling_factor);
+    };
+
+    // A finite difference alone cannot prove that component scaling was
+    // applied: energy and potential could omit the same factors and remain
+    // self-consistent.  Independently require linearity against unscaled
+    // exchange-only and correlation-only evaluations.
+    const VxcResult exchange
+        = evaluate_libxc({XC_GGA_X_PBE}, nullptr);
+    const VxcResult correlation
+        = evaluate_libxc({XC_GGA_C_PBE}, nullptr);
+    const VxcResult scaled = evaluate();
+    const double exchange_factor = scaling_factor.at(XC_GGA_X_PBE);
+    const double correlation_factor = scaling_factor.at(XC_GGA_C_PBE);
+    const double expected_energy
+        = exchange_factor * std::get<0>(exchange)
+          + correlation_factor * std::get<0>(correlation);
+    const double expected_vtxc
+        = exchange_factor * std::get<1>(exchange)
+          + correlation_factor * std::get<1>(correlation);
+    const double energy_error = std::abs(std::get<0>(scaled) - expected_energy);
+    const double vtxc_error = std::abs(std::get<1>(scaled) - expected_vtxc);
+    double local_potential_error = 0.0;
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            const double expected
+                = exchange_factor * std::get<2>(exchange)(channel, ir)
+                  + correlation_factor * std::get<2>(correlation)(channel, ir);
+            local_potential_error
+                = std::max(local_potential_error,
+                           std::abs(std::get<2>(scaled)(channel, ir) - expected));
+        }
+    }
+    const double potential_error = pool_max(local_potential_error);
+    EXPECT_LE(energy_error, 5.0e-11 * std::max(1.0, std::abs(expected_energy)));
+    EXPECT_LE(vtxc_error, 5.0e-11 * std::max(1.0, std::abs(expected_vtxc)));
+    EXPECT_LE(potential_error, 8.0e-11);
+    if (is_pool_root())
+    {
+        std::cout << std::setprecision(17)
+                  << "LIBXC_SCALING_LINEARITY mode=libxc_gga2_scaled"
+                  << " energy_error=" << energy_error
+                  << " vtxc_error=" << vtxc_error
+                  << " max_potential_error=" << potential_error << '\n';
+    }
+
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_scaled",
+        evaluate,
+        {1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+    expect_vtxc_matches_returned_potential("libxc_gga2_scaled", evaluate);
+}
+
+TEST_F(RealPwNcgga, LibxcGgaGrad2DifferentiatesMixedLdaAndGgaComponents)
+{
+    const std::vector<int> functionals = {XC_LDA_X, XC_GGA_C_PBE};
+    const Evaluator evaluate = [this, &functionals]()
+    {
+        return evaluate_libxc(functionals, nullptr);
+    };
+    const BranchMargins margins = report_branch_margins("libxc_mixed_lda_gga");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_directional_derivatives_at_steps(
+        "libxc_gga2_mixed_lda_gga",
+        evaluate,
+        {1.0e-2, 5.0e-3, 2.5e-3, 1.25e-3, 6.25e-4});
+    expect_vtxc_matches_returned_potential(
+        "libxc_gga2_mixed_lda_gga", evaluate);
+}
 #endif
 
 TEST_F(RealPwNcgga, BuiltinGgaGrad2VtxcEqualsFinalValencePotentialInnerProduct)
@@ -1080,30 +1511,6 @@ TEST_F(RealPwNcgga, BuiltinGgaGrad2VtxcEqualsFinalValencePotentialInnerProduct)
     expect_vtxc_matches_returned_potential(
         "inside_eta", [this]() { return evaluate_builtin(2); });
 }
-
-#ifdef __LIBXC
-TEST_F(RealPwNcgga, LibxcGgaGrad2VtxcBookkeepingUsesFinalReturnedPotential)
-{
-    const auto evaluate = [this]()
-    {
-        const std::vector<int> functionals = {XC_LDA_X, XC_GGA_C_PBE};
-        return XC_Functional_Libxc::v_xc_libxc(functionals,
-                                               pw.nrxx,
-                                               pw.omega,
-                                               pw.tpiba,
-                                               &charge,
-                                               4,
-                                               true,
-                                               false,
-                                               2,
-                                               nullptr,
-                                               0.0,
-                                               0.0);
-    };
-    expect_vtxc_matches_returned_potential(
-        "libxc_gga2_mixed", evaluate);
-}
-#endif
 
 TEST_F(RealPwNcgga, BuiltinGgaGrad2IsDiscreteGradientOnSmoothProjectedBranch)
 {

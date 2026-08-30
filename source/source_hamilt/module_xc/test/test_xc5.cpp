@@ -363,8 +363,9 @@ TEST_F(XCTest_VXC_meta, set_xc_type)
  *  unit tests for the gga_grad keyword (nspin=4
  *  noncollinear GGA gradient methods)
  *
- *  Method 2 uses projected spin-up/down gradients:
- *    gga_grad=2 (projected): v_mu -= m_hat_mu * div((h_up - h_dn)/2)
+ *  Method 2 differentiates the complete discrete local-spin-map and FFT
+ *  gradient graph.  Its reverse is tested on a real PW grid in
+ *  test_ncgga_discrete_fd.cpp.
  *  Method 3 uses the continuous B2 invariants, including transverse
  *  magnetization-gradient power and the local response of m_hat.
  ***********************************************/
@@ -437,6 +438,50 @@ struct Ns4Charge
         }
     }
 };
+
+TEST(GgaGradVxc, LegacyProjectedLibxcReverseIsRejected)
+{
+    Ns4Charge mock(0);
+    const int nspin = 2;
+    const std::vector<double> sgn(gga_grad_nrxx * nspin, 1.0);
+    const std::vector<double> vsigma(gga_grad_nrxx * 3, 0.2);
+    const std::vector<double> mag_part
+        = XC_Functional_Libxc::compute_mag_part_nspin4(
+            gga_grad_nrxx, &mock.chr);
+    const std::tuple<std::vector<double>, std::vector<double>> rho_amag
+        = XC_Functional_Libxc::convert_rho_amag_nspin4(
+            nspin, gga_grad_nrxx, &mock.chr);
+    const std::vector<std::vector<ModuleBase::Vector3<double>>> gdr
+        = XC_Functional_Libxc::cal_gdr_sf(
+            nspin,
+            gga_grad_nrxx,
+            std::get<0>(rho_amag),
+            mag_part,
+            mock.ucell.tpiba,
+            &mock.chr);
+
+    EXPECT_THROW(
+        XC_Functional_Libxc::cal_dh_sf(nspin,
+                                       gga_grad_nrxx,
+                                       sgn,
+                                       gdr,
+                                       vsigma,
+                                       mag_part,
+                                       2,
+                                       mock.ucell.tpiba,
+                                       &mock.chr),
+        std::domain_error);
+    EXPECT_NO_THROW(
+        XC_Functional_Libxc::cal_dh_sf(nspin,
+                                       gga_grad_nrxx,
+                                       sgn,
+                                       gdr,
+                                       vsigma,
+                                       mag_part,
+                                       3,
+                                       mock.ucell.tpiba,
+                                       &mock.chr));
+}
 
 struct Ns2LocalCharge
 {
@@ -591,60 +636,6 @@ TEST(GgaGradTools, ConvertVNspin4HasMag)
     {
         const double vs = 0.5 * (v(0, ir) - v(1, ir));
         EXPECT_NEAR(v_mag(3, ir), vs * mock.chr.rho[3][ir] / amag[ir], 1e-14);
-    }
-}
-
-class GgaGradProjectedDh : public testing::Test
-{
-  protected:
-    // dh from the projected gga_grad=2 path.
-    void run(const int pattern,
-             std::vector<std::vector<double>>& dh2,
-             std::vector<double>& mag_part)
-    {
-        Ns4Charge mock(pattern);
-        mag_part = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
-
-        const std::tuple<std::vector<double>, std::vector<double>> rho_amag
-            = XC_Functional_Libxc::convert_rho_amag_nspin4(2, gga_grad_nrxx, &mock.chr);
-        const std::vector<double>& rho = std::get<0>(rho_amag);
-        const std::vector<std::vector<ModuleBase::Vector3<double>>> gdr
-            = XC_Functional_Libxc::cal_gdr_sf(2, gga_grad_nrxx, rho, mag_part, mock.ucell.tpiba, &mock.chr);
-
-        std::vector<double> sgn(gga_grad_nrxx * 2, 1.0);
-        std::vector<double> vsigma(gga_grad_nrxx * 3);
-        for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-        {
-            for (int j = 0; j < 3; ++j)
-            {
-                vsigma[ir * 3 + j] = 0.2 + 0.1 * ir + 0.05 * j;
-            }
-        }
-
-        dh2 = XC_Functional_Libxc::cal_dh_sf(
-            2, gga_grad_nrxx, sgn, gdr, vsigma, mag_part, 2, mock.ucell.tpiba, &mock.chr);
-    }
-};
-
-// for gga_grad=2, dh_mu = m_hat_mu * div((h_up-h_dn)/2), so the magnetic
-// channels satisfy dh_mu = m_hat_mu * (m_hat . dh) exactly
-TEST_F(GgaGradProjectedDh, ProjectedDivergenceIsProjection)
-{
-    std::vector<std::vector<double>> dh2;
-    std::vector<double> mag_part;
-    run(1, dh2, mag_part);
-
-    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-    {
-        double proj = 0.0;
-        for (int mu = 1; mu < 4; ++mu)
-        {
-            proj += mag_part[ir + (mu - 1) * gga_grad_nrxx] * dh2[mu][ir];
-        }
-        for (int mu = 1; mu < 4; ++mu)
-        {
-            EXPECT_NEAR(dh2[mu][ir], mag_part[ir + (mu - 1) * gga_grad_nrxx] * proj, 1e-12);
-        }
     }
 }
 

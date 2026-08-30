@@ -5,10 +5,12 @@
 
 #include "source_base/matrix.h"
 #include "source_base/vector3.h"
+#include "xc_ncgga_radial.h"
 
 #include <xc.h>
 #include <xc_funcs.h>
 
+#include <array>
 #include <tuple>
 #include <vector>
 
@@ -24,6 +26,19 @@ namespace XC_Functional_Libxc
         double energy_sum;
         std::vector<double> drho;
         std::vector<double> dsigma;
+    };
+
+    // Complete forward data for the gga_grad=2 noncollinear Libxc graph:
+    //   rho_s = N_s(x),
+    //   g_s   = sum_A (d N_s / d x_A) G_h x_A.
+    // Keeping the local map and all input gradients together lets the reverse
+    // use the exact same branch choices and radial Hessian as the forward.
+    struct NclSfDiscreteData
+    {
+        std::vector<ModuleXC::NcggaSpinMapPoint> spin_map;
+        std::vector<double> rho;
+        std::vector<std::vector<ModuleBase::Vector3<double>>> spin_gradient;
+        std::array<std::vector<ModuleBase::Vector3<double>>, 3> grad_m;
     };
 
 //-------------------
@@ -105,6 +120,25 @@ namespace XC_Functional_Libxc
         const std::size_t nrxx,
         const Charge* const chr);
 
+    // Build the exact gga_grad=2 local spin map and, when requested, its
+    // projected FFT-gradient graph.  LDA-only callers set need_gradient=false.
+    extern NclSfDiscreteData make_ncl_sf_discrete_data(
+        const std::size_t nrxx,
+        const double tpiba,
+        const Charge* const chr,
+        const bool need_gradient);
+
+    // Reverse one aggregate of all scaled Libxc components.  The returned
+    // potential is already in (n,mx,my,mz) representation.  An empty dsigma
+    // selects the LDA-only local reverse and performs no FFT divergence.
+    extern ModuleBase::matrix reverse_ncl_sf_discrete(
+        const std::size_t nrxx,
+        const NclSfDiscreteData& data,
+        const std::vector<double>& drho,
+        const std::vector<double>& dsigma,
+        const double tpiba,
+        const Charge* const chr);
+
     // calculating grho
     extern std::vector<std::vector<ModuleBase::Vector3<double>>> cal_gdr(
         const int nspin,
@@ -159,10 +193,10 @@ namespace XC_Functional_Libxc
         const std::vector<double> &vrho,
         const std::vector<double> &vsigma);
 
-    // converting vtxc and v from vrho and vsigma (libxc=>abacus)
-    // use_sf: for nspin=4 magnetic GGA, apply the Scalmani-Frisch
-    // gradient correction instead of the collinear one; gga_grad then
-    // selects the projected (2) or full (3) divergence of h
+    // Convert vtxc and v from vrho and vsigma (libxc=>abacus).  Its non-SF and
+    // LDA branches remain active.  The SF GGA branch is legacy: the public
+    // gga_grad=2 driver uses reverse_ncl_sf_discrete, while the public driver
+    // rejects the remaining gga_grad=3 compatibility implementation.
     extern std::pair<double, ModuleBase::matrix> convert_vtxc_v(
         const xc_func_type &func,
         const int nspin,
@@ -197,6 +231,9 @@ namespace XC_Functional_Libxc
         const ModuleBase::matrix &v,
         const bool has_mag);
 
+    // Legacy raw-|m| SF helpers.  The public driver keeps them only for the
+    // gga_grad=3 compatibility path; gga_grad=2 must use NclSfDiscreteData so
+    // its forward and reverse share one complete map.
     extern std::vector<double> compute_mag_part_nspin4(
         const std::size_t nrxx,
         const Charge* const chr);
@@ -209,6 +246,8 @@ namespace XC_Functional_Libxc
         const double tpiba,
         const Charge* const chr);
 
+    // Legacy gga_grad=3 SF reverse.  gga_grad=2 is deliberately rejected so a
+    // direct low-level caller cannot recover the disproved projected response.
     extern std::vector<std::vector<double>> cal_dh_sf(
         const int nspin,
         const std::size_t nrxx,

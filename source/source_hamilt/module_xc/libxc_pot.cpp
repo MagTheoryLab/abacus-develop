@@ -43,6 +43,7 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
     // original collinear algorithm.
     const bool has_mag = domag || domag_z;
     const bool use_sf = (nspin_in == 4) && has_mag && (gga_grad == 2 || gga_grad == 3);
+    const bool use_exact_sf = use_sf && gga_grad == 2;
 
     //----------------------------------------------------------
     // xc_func_type is defined in Libxc package
@@ -87,9 +88,19 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
     std::vector<double> rho;
     std::vector<double> amag;
     std::vector<double> mag_part;
+    XC_Functional_Libxc::NclSfDiscreteData sf_data;
     if(1==nspin || 2==nspin_in)
     {
         rho = XC_Functional_Libxc::convert_rho(nspin, nrxx, chr);
+    }
+    else if (use_exact_sf)
+    {
+        // gga_grad=2 uses one complete local map for both the Libxc density
+        // input and the projected FFT-gradient graph.  LDA-only functionals
+        // need the same local map but do not pay for gradients.
+        sf_data = XC_Functional_Libxc::make_ncl_sf_discrete_data(
+            nrxx, tpiba, chr, is_gga);
+        rho = sf_data.rho;
     }
     else
     {
@@ -114,7 +125,11 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
         // gga_grad=2/3: use SF method to compute spin-up/spin-down gradients
         // via the chain-rule decomposition. This is more accurate than the
         // collinear approximation (gga_grad=0/1) for noncollinear magnetism.
-        if(use_sf)
+        if(use_exact_sf)
+        {
+            gdr = sf_data.spin_gradient;
+        }
+        else if(use_sf)
         {
             gdr = XC_Functional_Libxc::cal_gdr_sf(nspin, nrxx, rho, mag_part, tpiba, chr);
         }
@@ -127,7 +142,17 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
 
     double etxc = 0.0;
     double vtxc = 0.0;
-    ModuleBase::matrix v(nspin,nrxx);
+    ModuleBase::matrix v(use_exact_sf ? 4 : nspin, nrxx);
+    XC_Functional_Libxc::LibxcWeightedDerivatives sf_weighted;
+    if (use_exact_sf)
+    {
+        sf_weighted.energy_sum = 0.0;
+        sf_weighted.drho.assign(nrxx * nspin, 0.0);
+        if (is_gga)
+        {
+            sf_weighted.dsigma.assign(nrxx * 3, 0.0);
+        }
+    }
 
     for( xc_func_type &func : funcs )
     {
@@ -206,37 +231,61 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
                 { factor = pair_factor->second; }
         }
 
-        // Keep the established energy accumulation and reduction order. The
-        // weighted reverse differentiates that same M*eps energy. SF GGA
-        // functionals are deferred to the later exact-discrete-SF contract;
-        // LDA has no gradient graph and can be reversed here in every mode.
+        // Keep the established energy accumulation and reduction order.  In
+        // gga_grad=2, reverse every sanitizer now, apply the component scaling,
+        // and aggregate before traversing the shared projected graph once.
         etxc += XC_Functional_Libxc::convert_etxc(nspin, nrxx, sgn, rho, exc) * factor;
-        std::vector<double> potential_sgn = sgn;
-        const std::vector<double>* potential_vrho = &vrho;
-        const std::vector<double>* potential_vsigma = &vsigma;
-        XC_Functional_Libxc::LibxcWeightedDerivatives weighted;
-        const bool defer_to_sf
-            = use_sf
-              && (func.info->family == XC_FAMILY_GGA
-                  || func.info->family == XC_FAMILY_HYB_GGA);
-        if (!defer_to_sf)
+        if (use_exact_sf)
         {
-            weighted = XC_Functional_Libxc::make_libxc_weighted_derivatives(
+            const XC_Functional_Libxc::LibxcWeightedDerivatives weighted
+                = XC_Functional_Libxc::make_libxc_weighted_derivatives(
                 func, nspin, nrxx, sgn, rho, sigma, exc, vrho, vsigma);
-            potential_sgn.assign(nrxx * nspin, 1.0);
-            potential_vrho = &weighted.drho;
-            potential_vsigma = &weighted.dsigma;
+            for (std::size_t index = 0; index < sf_weighted.drho.size(); ++index)
+            {
+                sf_weighted.drho[index] += factor * weighted.drho[index];
+            }
+            for (std::size_t index = 0; index < weighted.dsigma.size(); ++index)
+            {
+                sf_weighted.dsigma[index] += factor * weighted.dsigma[index];
+            }
         }
-        const std::pair<double,ModuleBase::matrix> vtxc_v = XC_Functional_Libxc::convert_vtxc_v(
-            func, nspin, nrxx,
-            potential_sgn, rho, gdr,
-            *potential_vrho, *potential_vsigma,
-            tpiba, chr, use_sf, gga_grad);
-        vtxc += std::get<0>(vtxc_v) * factor;
-        v += std::get<1>(vtxc_v) * factor;
+        else
+        {
+            std::vector<double> potential_sgn = sgn;
+            const std::vector<double>* potential_vrho = &vrho;
+            const std::vector<double>* potential_vsigma = &vsigma;
+            XC_Functional_Libxc::LibxcWeightedDerivatives weighted;
+            const bool defer_to_sf
+                = use_sf
+                  && (func.info->family == XC_FAMILY_GGA
+                      || func.info->family == XC_FAMILY_HYB_GGA);
+            if (!defer_to_sf)
+            {
+                weighted = XC_Functional_Libxc::make_libxc_weighted_derivatives(
+                    func, nspin, nrxx, sgn, rho, sigma, exc, vrho, vsigma);
+                potential_sgn.assign(nrxx * nspin, 1.0);
+                potential_vrho = &weighted.drho;
+                potential_vsigma = &weighted.dsigma;
+            }
+            const std::pair<double,ModuleBase::matrix> vtxc_v
+                = XC_Functional_Libxc::convert_vtxc_v(
+                    func, nspin, nrxx,
+                    potential_sgn, rho, gdr,
+                    *potential_vrho, *potential_vsigma,
+                    tpiba, chr, use_sf, gga_grad);
+            vtxc += std::get<0>(vtxc_v) * factor;
+            v += std::get<1>(vtxc_v) * factor;
+        }
     } // end for( xc_func_type &func : funcs )
 
-    if(4==nspin_in)
+    if (use_exact_sf)
+    {
+        v = XC_Functional_Libxc::reverse_ncl_sf_discrete(
+            nrxx, sf_data, sf_weighted.drho, sf_weighted.dsigma,
+            tpiba, chr);
+    }
+
+    if(4==nspin_in && !use_exact_sf)
     {
         // gga_grad=2/3: convert libxc spin-up/spin-down potential back to
         // nspin=4 representation via SF method (v_total, v_mag_hat)

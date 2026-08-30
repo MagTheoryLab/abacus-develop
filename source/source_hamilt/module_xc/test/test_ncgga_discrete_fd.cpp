@@ -6,6 +6,7 @@
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
 #include "source_basis/module_pw/pw_basis.h"
+#include "source_cell/unitcell.h"
 #include "source_estate/module_charge/charge.h"
 
 #ifdef __MPI
@@ -35,6 +36,19 @@
 // boundary is needed here.
 Charge::Charge() {}
 Charge::~Charge() {}
+
+// This target links the production PW/XC objects but not the full cell object
+// library.  The stress entry point only reads UnitCell::tpiba and magnet.lsign_
+// in the parent implementation, so provide the same narrow lifetime boundary
+// used by the existing XC focused tests.
+UnitCell::UnitCell() {}
+UnitCell::~UnitCell() {}
+Magnetism::Magnetism() {}
+Magnetism::~Magnetism() {}
+SepPot::SepPot() {}
+SepPot::~SepPot() {}
+Sep_Cell::Sep_Cell() noexcept {}
+Sep_Cell::~Sep_Cell() noexcept {}
 
 namespace
 {
@@ -128,6 +142,17 @@ class RealPwNcgga : public testing::Test
     std::array<double*, 4> density_pointer;
     std::vector<double> core_density;
     std::vector<std::complex<double>> core_density_reciprocal;
+    std::array<std::vector<std::complex<double>>, 2> charge_reciprocal;
+    std::array<std::complex<double>*, 2> charge_reciprocal_pointer;
+
+    struct ReciprocalMetricState
+    {
+        std::vector<ModuleBase::Vector3<double>> gcar;
+        std::array<std::vector<double>, 4> density;
+        std::vector<double> core_density;
+        std::vector<std::complex<double>> core_density_reciprocal;
+        double omega = 0.0;
+    };
 
     void SetUp() override
     {
@@ -167,6 +192,12 @@ class RealPwNcgga : public testing::Test
         }
         core_density.resize(pw.nrxx);
         core_density_reciprocal.resize(pw.npw);
+        for (int spin = 0; spin < 2; ++spin)
+        {
+            charge_reciprocal[spin].resize(pw.npw);
+            charge_reciprocal_pointer[spin]
+                = charge_reciprocal[spin].data();
+        }
 
         charge.rhopw = &pw;
         charge.nrxx = pw.nrxx;
@@ -174,6 +205,7 @@ class RealPwNcgga : public testing::Test
         charge.ngmc = pw.npw;
         charge.nspin = 4;
         charge.rho = density_pointer.data();
+        charge.rhog = charge_reciprocal_pointer.data();
         charge.rho_core = core_density.data();
         charge.rhog_core = core_density_reciprocal.data();
 
@@ -357,6 +389,314 @@ class RealPwNcgga : public testing::Test
             core_density[ir] = 0.05 + 0.01 * std::cos(2.0 * x + z - 0.1);
         }
         pw.real2recip(core_density.data(), core_density_reciprocal.data());
+    }
+
+    void set_zero_core_density()
+    {
+        std::fill(core_density.begin(), core_density.end(), 0.0);
+        std::fill(core_density_reciprocal.begin(),
+                  core_density_reciprocal.end(),
+                  std::complex<double>(0.0, 0.0));
+    }
+
+    ReciprocalMetricState capture_reciprocal_metric_state() const
+    {
+        ReciprocalMetricState state;
+        state.gcar.assign(pw.gcar, pw.gcar + pw.npw);
+        state.density = density;
+        state.core_density = core_density;
+        state.core_density_reciprocal = core_density_reciprocal;
+        state.omega = pw.omega;
+        return state;
+    }
+
+    void restore_reciprocal_metric_state(
+        const ReciprocalMetricState& state)
+    {
+        ASSERT_EQ(state.gcar.size(), static_cast<std::size_t>(pw.npw));
+        for (int ig = 0; ig < pw.npw; ++ig)
+        {
+            pw.gcar[ig] = state.gcar[ig];
+        }
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            ASSERT_EQ(state.density[channel].size(), density[channel].size());
+            std::copy(state.density[channel].begin(),
+                      state.density[channel].end(),
+                      density[channel].begin());
+        }
+        ASSERT_EQ(state.core_density.size(), core_density.size());
+        std::copy(state.core_density.begin(),
+                  state.core_density.end(),
+                  core_density.begin());
+        ASSERT_EQ(state.core_density_reciprocal.size(),
+                  core_density_reciprocal.size());
+        std::copy(state.core_density_reciprocal.begin(),
+                  state.core_density_reciprocal.end(),
+                  core_density_reciprocal.begin());
+        pw.omega = state.omega;
+    }
+
+    static void add_matrix_element(ModuleBase::Matrix3& matrix,
+                                   const int row,
+                                   const int column,
+                                   const double value)
+    {
+        ASSERT_GE(row, 0);
+        ASSERT_LT(row, 3);
+        ASSERT_GE(column, 0);
+        ASSERT_LT(column, 3);
+        double* element = nullptr;
+        if (row == 0 && column == 0) element = &matrix.e11;
+        if (row == 0 && column == 1) element = &matrix.e12;
+        if (row == 0 && column == 2) element = &matrix.e13;
+        if (row == 1 && column == 0) element = &matrix.e21;
+        if (row == 1 && column == 1) element = &matrix.e22;
+        if (row == 1 && column == 2) element = &matrix.e23;
+        if (row == 2 && column == 0) element = &matrix.e31;
+        if (row == 2 && column == 1) element = &matrix.e32;
+        if (row == 2 && column == 2) element = &matrix.e33;
+        ASSERT_NE(element, nullptr);
+        *element += value;
+    }
+
+    double evaluate_reciprocal_metric_deformation(
+        const ReciprocalMetricState& state,
+        const int stress_row,
+        const int stress_column,
+        const double epsilon,
+        const bool homogeneous_density_scaling)
+    {
+        restore_reciprocal_metric_state(state);
+
+        // gcar is stored as a row vector.  Under r' = F r, reciprocal
+        // vectors transform as k' = k F^{-1}.  Perturb F_{column,row}; its
+        // derivative contracts exactly with the lower-triangle convention
+        // sum_r h_row * g_column used by production stress_gga.
+        ModuleBase::Matrix3 deformation;
+        add_matrix_element(
+            deformation, stress_column, stress_row, epsilon);
+        const double determinant = deformation.Det();
+        const ModuleBase::Matrix3 inverse = deformation.Inverse();
+        for (int ig = 0; ig < pw.npw; ++ig)
+        {
+            pw.gcar[ig] = state.gcar[ig] * inverse;
+        }
+
+        if (homogeneous_density_scaling)
+        {
+            pw.omega = state.omega * determinant;
+            for (int channel = 0; channel < 4; ++channel)
+            {
+                for (int ir = 0; ir < pw.nrxx; ++ir)
+                {
+                    density[channel][ir]
+                        = state.density[channel][ir] / determinant;
+                }
+            }
+            for (int ir = 0; ir < pw.nrxx; ++ir)
+            {
+                core_density[ir]
+                    = state.core_density[ir] / determinant;
+            }
+            pw.real2recip(
+                core_density.data(), core_density_reciprocal.data());
+        }
+
+        const double energy = std::get<0>(evaluate_builtin(2));
+        restore_reciprocal_metric_state(state);
+        return energy;
+    }
+
+    std::vector<double> evaluate_builtin_gradient_stress()
+    {
+        XC_Functional::set_xc_type("PBE");
+        UnitCell cell;
+        cell.tpiba = pw.tpiba;
+        cell.magnet.lsign_ = false;
+        double dummy_energy = 0.0;
+        double dummy_vtxc = 0.0;
+        ModuleBase::matrix dummy_potential;
+        std::vector<double> stress;
+        XC_Functional::gradcorr(dummy_energy,
+                                dummy_vtxc,
+                                dummy_potential,
+                                &charge,
+                                &pw,
+                                &cell,
+                                stress,
+                                true,
+                                4,
+                                true,
+                                false,
+                                2,
+                                0.0,
+                                0.0);
+        EXPECT_EQ(stress.size(), 9U);
+        return stress;
+    }
+
+    void expect_builtin_gradient_stress_metric_derivative(
+        const std::string& mode)
+    {
+        const ReciprocalMetricState state
+            = capture_reciprocal_metric_state();
+        const std::vector<double> local_stress
+            = evaluate_builtin_gradient_stress();
+        const std::array<double, 4> eps_values
+            = {{2.0e-3, 1.0e-3, 5.0e-4, 2.5e-4}};
+
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column <= row; ++column)
+            {
+                SCOPED_TRACE(mode + " metric component "
+                             + std::to_string(row) + std::to_string(column));
+                const int index = row * 3 + column;
+                const double analytic
+                    = pool_sum(local_stress[index]) / pw.nxyz;
+                std::array<double, 4> errors = {{0.0, 0.0, 0.0, 0.0}};
+                for (int ieps = 0; ieps < 4; ++ieps)
+                {
+                    const double epsilon = eps_values[ieps];
+                    const double energy_plus
+                        = evaluate_reciprocal_metric_deformation(
+                            state, row, column, epsilon, false);
+                    const double energy_minus
+                        = evaluate_reciprocal_metric_deformation(
+                            state, row, column, -epsilon, false);
+                    const double finite_difference
+                        = -(energy_plus - energy_minus)
+                          / (2.0 * epsilon * state.omega);
+                    errors[ieps] = std::abs(finite_difference - analytic);
+                    if (is_pool_root())
+                    {
+                        const double relative_scale
+                            = std::max(1.0e-30,
+                                       std::max(std::abs(analytic),
+                                                std::abs(finite_difference)));
+                        const double order
+                            = ieps == 0 || errors[ieps] == 0.0
+                                  ? 0.0
+                                  : std::log(errors[ieps - 1] / errors[ieps])
+                                        / std::log(2.0);
+                        std::cout << std::setprecision(17)
+                                  << "NCGGA_STRESS_METRIC_FD mode=" << mode
+                                  << " row=" << row
+                                  << " column=" << column
+                                  << " eps=" << epsilon
+                                  << " analytic=" << analytic
+                                  << " finite_difference=" << finite_difference
+                                  << " absolute_error=" << errors[ieps]
+                                  << " relative_error="
+                                  << errors[ieps] / relative_scale
+                                  << " convergence_order=" << order << '\n';
+                    }
+                }
+                // Stress components can be much smaller than one.  Scaling
+                // the tolerance by max(1, |sigma|) would hide a persistent
+                // O(10%) slope offset on the regularized radial branch.
+                // The absolute floor only covers the observed FFT/energy
+                // roundoff plateau; the relative term still resolves every
+                // nonzero component in this fixture.
+                const double scale = std::max(1.0e-10, std::abs(analytic));
+                const double tolerance = 2.0e-5 * scale + 2.0e-13;
+                EXPECT_LE(*std::min_element(errors.begin(), errors.end()),
+                          tolerance);
+                // Once the absolute error is at the MPI energy-roundoff
+                // plateau, individual refinements need not remain monotone.
+                // Require the central-difference O(eps^2) contraction only
+                // while both adjacent errors are still resolved above that
+                // plateau.  The closure check above remains unconditional.
+                const double roundoff_plateau = 2.0e-12;
+                if (errors[0] > roundoff_plateau
+                    && errors[1] > roundoff_plateau)
+                {
+                    EXPECT_LE(errors[1], 0.4 * errors[0] + tolerance);
+                }
+                if (errors[1] > roundoff_plateau
+                    && errors[2] > roundoff_plateau)
+                {
+                    EXPECT_LE(errors[2], 0.4 * errors[1] + tolerance);
+                }
+            }
+        }
+    }
+
+    void expect_builtin_full_xc_diagonal_stress(
+        const std::string& mode)
+    {
+        // The returned vtxc is a valence-only four-channel inner product.
+        // Core deformation is accounted separately by stress_cc in the full
+        // PW stress path, so this isolated XC diagonal identity requires a
+        // zero core density.
+        set_zero_core_density();
+        ASSERT_EQ(pool_max(*std::max_element(core_density.begin(),
+                                             core_density.end())),
+                  0.0);
+        const ReciprocalMetricState state
+            = capture_reciprocal_metric_state();
+        const VxcResult base = evaluate_builtin(2);
+        const std::vector<double> local_stress
+            = evaluate_builtin_gradient_stress();
+        const double diagonal_local_term
+            = -(std::get<0>(base) - std::get<1>(base)) / state.omega;
+        const std::array<double, 4> eps_values
+            = {{2.0e-3, 1.0e-3, 5.0e-4, 2.5e-4}};
+
+        for (int diagonal = 0; diagonal < 3; ++diagonal)
+        {
+            SCOPED_TRACE(mode + " full diagonal "
+                         + std::to_string(diagonal));
+            const double gradient_correction
+                = pool_sum(local_stress[diagonal * 3 + diagonal]) / pw.nxyz;
+            const double analytic
+                = diagonal_local_term + gradient_correction;
+            std::array<double, 4> errors = {{0.0, 0.0, 0.0, 0.0}};
+            for (int ieps = 0; ieps < 4; ++ieps)
+            {
+                const double epsilon = eps_values[ieps];
+                const double energy_plus
+                    = evaluate_reciprocal_metric_deformation(
+                        state, diagonal, diagonal, epsilon, true);
+                const double energy_minus
+                    = evaluate_reciprocal_metric_deformation(
+                        state, diagonal, diagonal, -epsilon, true);
+                const double finite_difference
+                    = -(energy_plus - energy_minus)
+                      / (2.0 * epsilon * state.omega);
+                errors[ieps] = std::abs(finite_difference - analytic);
+                if (is_pool_root())
+                {
+                    const double relative_scale
+                        = std::max(1.0e-30,
+                                   std::max(std::abs(analytic),
+                                            std::abs(finite_difference)));
+                    const double order
+                        = ieps == 0 || errors[ieps] == 0.0
+                              ? 0.0
+                              : std::log(errors[ieps - 1] / errors[ieps])
+                                    / std::log(2.0);
+                    std::cout << std::setprecision(17)
+                              << "NCGGA_STRESS_FULL_FD mode=" << mode
+                              << " diagonal=" << diagonal
+                              << " eps=" << epsilon
+                              << " gradient_correction=" << gradient_correction
+                              << " local_diagonal=" << diagonal_local_term
+                              << " analytic=" << analytic
+                              << " finite_difference=" << finite_difference
+                              << " absolute_error=" << errors[ieps]
+                              << " relative_error="
+                              << errors[ieps] / relative_scale
+                              << " convergence_order=" << order << '\n';
+                }
+            }
+            const double scale = std::max(1.0, std::abs(analytic));
+            EXPECT_LE(*std::min_element(errors.begin(), errors.end()),
+                      5.0e-8 * scale);
+            EXPECT_LE(errors[1], 0.4 * errors[0] + 1.0e-8 * scale);
+            EXPECT_LE(errors[2], 0.4 * errors[1] + 1.0e-8 * scale);
+        }
     }
 
     BranchMargins report_branch_margins(const std::string& mode)
@@ -1666,6 +2006,69 @@ TEST_F(RealPwNcgga, BuiltinGgaGrad2IsCovariantUnderGlobalSpinRotation)
         EXPECT_NEAR(rotated_potential(3, ir), original_potential(3, ir),
                     5.0e-11 * std::max(1.0, std::abs(original_potential(3, ir))));
     }
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2StressClosesSmoothSixComponentMetricDerivative)
+{
+    const BranchMargins margins = report_branch_margins("stress_smooth");
+    EXPECT_GT(margins.min_abs_total_density, 1.0);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    EXPECT_GT(margins.min_eta_distance, 0.3);
+    expect_builtin_gradient_stress_metric_derivative("smooth");
+
+    set_zero_core_density();
+    const BranchMargins zero_core
+        = report_branch_margins("stress_smooth_zero_core");
+    EXPECT_GT(zero_core.min_abs_total_density, 1.0);
+    EXPECT_GT(zero_core.min_signed_saturation_gap, 0.8);
+    expect_builtin_full_xc_diagonal_stress("smooth");
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2StressClosesNegativeAbsSixComponentMetricDerivative)
+{
+    set_negative_gga_state();
+    const BranchMargins margins = report_branch_margins("stress_negative_abs");
+    EXPECT_GT(margins.min_abs_total_density, 1.3);
+    EXPECT_GT(margins.min_signed_saturation_gap, 0.8);
+    expect_builtin_gradient_stress_metric_derivative("negative_abs");
+
+    set_zero_core_density();
+    const BranchMargins zero_core
+        = report_branch_margins("stress_negative_abs_zero_core");
+    EXPECT_GT(zero_core.min_abs_total_density, 1.3);
+    EXPECT_GT(zero_core.min_signed_saturation_gap, 0.8);
+    expect_builtin_full_xc_diagonal_stress("negative_abs");
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2StressClosesSaturatedSixComponentMetricDerivative)
+{
+    set_saturated_gga_state();
+    const BranchMargins margins = report_branch_margins("stress_saturated");
+    EXPECT_LT(margins.max_signed_saturation_gap, -0.1);
+    expect_builtin_gradient_stress_metric_derivative("saturated");
+
+    set_zero_core_density();
+    const BranchMargins zero_core
+        = report_branch_margins("stress_saturated_zero_core");
+    EXPECT_LT(zero_core.max_signed_saturation_gap, -0.1);
+    expect_builtin_full_xc_diagonal_stress("saturated");
+}
+
+TEST_F(RealPwNcgga, BuiltinGgaGrad2StressClosesRadialEtaSixComponentMetricDerivative)
+{
+    set_inside_eta_state();
+    const BranchMargins margins = report_branch_margins("stress_inside_eta");
+    EXPECT_GT(margins.min_abs_total_density, 0.025);
+    EXPECT_LT(margins.max_magnitude, 6.0e-4);
+    EXPECT_GT(margins.min_eta_distance, 4.0e-4);
+    expect_builtin_gradient_stress_metric_derivative("inside_eta");
+
+    set_zero_core_density();
+    const BranchMargins zero_core
+        = report_branch_margins("stress_inside_eta_zero_core");
+    EXPECT_GT(zero_core.min_abs_total_density, 0.025);
+    EXPECT_LT(zero_core.max_magnitude, 6.0e-4);
+    expect_builtin_full_xc_diagonal_stress("inside_eta");
 }
 
 TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)

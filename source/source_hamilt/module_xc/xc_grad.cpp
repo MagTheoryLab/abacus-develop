@@ -69,6 +69,13 @@ void XC_Functional::gradcorr(
         return;
     }
 
+    if (is_stress && !use_libxc && nspin == 4 && (domag || domag_z) && gga_grad == 2)
+    {
+        ModuleXC::NCGGA_SF_Builtin::gradcorr_ncgga_lca_builtin(
+            chr, rhopw, ucell->tpiba, stress_gga);
+        return;
+    }
+
     if (is_stress && !use_libxc && nspin == 4 && (domag || domag_z) && gga_grad == 3)
     {
         ModuleXC::NCGGA_SF_Builtin::gradcorr_ncgga_sf_builtin(chr, rhopw, ucell, stress_gga);

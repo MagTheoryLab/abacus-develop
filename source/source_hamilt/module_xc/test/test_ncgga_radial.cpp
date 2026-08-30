@@ -2,8 +2,11 @@
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <stdexcept>
 
 namespace
@@ -45,6 +48,17 @@ double directional_hessian(const ModuleXC::NcggaRadialPoint& point,
         }
     }
     return result;
+}
+
+ModuleXC::NcggaSpinMapPoint make_spin_map(
+    const std::array<double, 4>& state,
+    const double eta)
+{
+    const std::array<double, 3> magnetization
+        = {{state[1], state[2], state[3]}};
+    return ModuleXC::make_ncgga_spin_map_point(
+        state[0],
+        ModuleXC::make_ncgga_radial_point(magnetization, eta));
 }
 
 TEST(NcggaRadial, RejectsNonPositiveEta)
@@ -228,6 +242,111 @@ TEST(NcggaRadial, DirectionalSecondDerivativeMatchesValueFiniteDifference)
         EXPECT_NEAR(finite_difference,
                     directional_hessian(point, direction),
                     2.0e-7);
+    }
+}
+
+TEST(NcggaRadial, SpinDensityMapJacobianMatchesFiniteDifferenceInEachBranch)
+{
+    const double eta = 0.5;
+    const double step = 2.0e-7;
+    const std::array<std::array<double, 4>, 5> states = {{
+        {{1.20, 0.30, -0.20, 0.10}},
+        {{-1.20, 0.30, -0.20, 0.10}},
+        {{0.20, 0.42, -0.31, 0.16}},
+        {{-0.20, 0.42, -0.31, 0.16}},
+        {{0.90, 0.12, -0.08, 0.05}}
+    }};
+
+    for (std::size_t sample = 0; sample < states.size(); ++sample)
+    {
+        const ModuleXC::NcggaSpinMapPoint point
+            = make_spin_map(states[sample], eta);
+        EXPECT_GE(point.spin_density[0], 0.0);
+        EXPECT_GE(point.spin_density[1], 0.0);
+        EXPECT_NEAR(point.spin_density[0] + point.spin_density[1],
+                    std::abs(states[sample][0]),
+                    1.0e-15);
+        EXPECT_NEAR(point.spin_density[0] - point.spin_density[1],
+                    point.clipped_magnitude,
+                    1.0e-15);
+
+        double maximum_error = 0.0;
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            std::array<double, 4> plus_state = states[sample];
+            std::array<double, 4> minus_state = states[sample];
+            plus_state[channel] += step;
+            minus_state[channel] -= step;
+            const ModuleXC::NcggaSpinMapPoint plus
+                = make_spin_map(plus_state, eta);
+            const ModuleXC::NcggaSpinMapPoint minus
+                = make_spin_map(minus_state, eta);
+            for (int spin = 0; spin < 2; ++spin)
+            {
+                const double finite_difference
+                    = (plus.spin_density[spin] - minus.spin_density[spin])
+                      / (2.0 * step);
+                maximum_error
+                    = std::max(maximum_error,
+                               std::abs(finite_difference
+                                        - point.jacobian(spin, channel)));
+                EXPECT_NEAR(finite_difference,
+                            point.jacobian(spin, channel),
+                            3.0e-9)
+                    << "sample=" << sample
+                    << " spin=" << spin
+                    << " channel=" << channel;
+            }
+        }
+        std::cout << std::setprecision(17)
+                  << "NCGGA_SPIN_MAP_FD sample=" << sample
+                  << " total_density=" << states[sample][0]
+                  << " absolute_density=" << point.absolute_density
+                  << " radial_value=" << point.radial.value
+                  << " clipped_magnitude=" << point.clipped_magnitude
+                  << " saturated=" << point.saturated
+                  << " step=" << step
+                  << " maximum_error=" << maximum_error << '\n';
+    }
+}
+
+TEST(NcggaRadial, SpinDensityMapDefinesAbsAndSaturationKinkConventions)
+{
+    const double eta = 0.1;
+    const ModuleXC::NcggaRadialPoint nonzero_radial
+        = ModuleXC::make_ncgga_radial_point({{0.30, 0.0, 0.0}}, eta);
+    const ModuleXC::NcggaSpinMapPoint zero_density
+        = ModuleXC::make_ncgga_spin_map_point(0.0, nonzero_radial);
+    EXPECT_TRUE(zero_density.saturated);
+    EXPECT_DOUBLE_EQ(zero_density.spin_density[0], 0.0);
+    EXPECT_DOUBLE_EQ(zero_density.spin_density[1], 0.0);
+    for (int spin = 0; spin < 2; ++spin)
+    {
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            EXPECT_DOUBLE_EQ(zero_density.jacobian(spin, channel), 0.0);
+        }
+    }
+
+    const ModuleXC::NcggaRadialPoint equality_radial
+        = ModuleXC::make_ncgga_radial_point({{0.50, 0.0, 0.0}}, eta);
+    const ModuleXC::NcggaSpinMapPoint positive
+        = ModuleXC::make_ncgga_spin_map_point(0.50, equality_radial);
+    const ModuleXC::NcggaSpinMapPoint negative
+        = ModuleXC::make_ncgga_spin_map_point(-0.50, equality_radial);
+    EXPECT_TRUE(positive.saturated);
+    EXPECT_TRUE(negative.saturated);
+    EXPECT_DOUBLE_EQ(positive.jacobian(0, 0), 1.0);
+    EXPECT_DOUBLE_EQ(positive.jacobian(1, 0), 0.0);
+    EXPECT_DOUBLE_EQ(negative.jacobian(0, 0), -1.0);
+    EXPECT_DOUBLE_EQ(negative.jacobian(1, 0), 0.0);
+    for (int spin = 0; spin < 2; ++spin)
+    {
+        for (int channel = 1; channel < 4; ++channel)
+        {
+            EXPECT_DOUBLE_EQ(positive.jacobian(spin, channel), 0.0);
+            EXPECT_DOUBLE_EQ(negative.jacobian(spin, channel), 0.0);
+        }
     }
 }
 

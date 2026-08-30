@@ -1,5 +1,6 @@
 #include "xc_ncgga_radial.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -61,6 +62,44 @@ NcggaRadialPoint make_ncgga_radial_point(
         point.gradient[component]
             = point.transverse_hessian * magnetization[component];
     }
+    return point;
+}
+
+double NcggaSpinMapPoint::jacobian(const int spin, const int channel) const
+{
+    if (channel == 0)
+    {
+        if (saturated)
+        {
+            return spin == 0 ? density_sign : 0.0;
+        }
+        return 0.5 * density_sign;
+    }
+    if (saturated)
+    {
+        return 0.0;
+    }
+    const double spin_sign = spin == 0 ? 0.5 : -0.5;
+    return spin_sign * radial.gradient[channel - 1];
+}
+
+NcggaSpinMapPoint make_ncgga_spin_map_point(
+    const double total_density,
+    const NcggaRadialPoint& radial)
+{
+    NcggaSpinMapPoint point;
+    point.radial = radial;
+    point.absolute_density = std::abs(total_density);
+    point.clipped_magnitude
+        = std::min(radial.value, point.absolute_density);
+    point.spin_density[0]
+        = 0.5 * (point.absolute_density + point.clipped_magnitude);
+    point.spin_density[1]
+        = 0.5 * (point.absolute_density - point.clipped_magnitude);
+    point.density_sign = total_density > 0.0 ? 1.0
+                         : total_density < 0.0 ? -1.0
+                                               : 0.0;
+    point.saturated = !(radial.value < point.absolute_density);
     return point;
 }
 

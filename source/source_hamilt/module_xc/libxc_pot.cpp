@@ -206,12 +206,31 @@ std::tuple<double,double,ModuleBase::matrix> XC_Functional_Libxc::v_xc_libxc(		/
                 { factor = pair_factor->second; }
         }
 
-        // time factor is added by jghan, 2024-10-10
+        // Keep the established energy accumulation and reduction order. The
+        // weighted reverse differentiates that same M*eps energy. SF GGA
+        // functionals are deferred to the later exact-discrete-SF contract;
+        // LDA has no gradient graph and can be reversed here in every mode.
         etxc += XC_Functional_Libxc::convert_etxc(nspin, nrxx, sgn, rho, exc) * factor;
+        std::vector<double> potential_sgn = sgn;
+        const std::vector<double>* potential_vrho = &vrho;
+        const std::vector<double>* potential_vsigma = &vsigma;
+        XC_Functional_Libxc::LibxcWeightedDerivatives weighted;
+        const bool defer_to_sf
+            = use_sf
+              && (func.info->family == XC_FAMILY_GGA
+                  || func.info->family == XC_FAMILY_HYB_GGA);
+        if (!defer_to_sf)
+        {
+            weighted = XC_Functional_Libxc::make_libxc_weighted_derivatives(
+                func, nspin, nrxx, sgn, rho, sigma, exc, vrho, vsigma);
+            potential_sgn.assign(nrxx * nspin, 1.0);
+            potential_vrho = &weighted.drho;
+            potential_vsigma = &weighted.dsigma;
+        }
         const std::pair<double,ModuleBase::matrix> vtxc_v = XC_Functional_Libxc::convert_vtxc_v(
             func, nspin, nrxx,
-            sgn, rho, gdr,
-            vrho, vsigma,
+            potential_sgn, rho, gdr,
+            *potential_vrho, *potential_vsigma,
             tpiba, chr, use_sf, gga_grad);
         vtxc += std::get<0>(vtxc_v) * factor;
         v += std::get<1>(vtxc_v) * factor;

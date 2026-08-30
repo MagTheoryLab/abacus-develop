@@ -8,6 +8,10 @@
 #include "source_cell/cal_ux.h"
 #include "../../../source_base/parallel_reduce.h"
 
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <map>
 #include <stdexcept>
 
 /************************************************
@@ -434,6 +438,36 @@ struct Ns4Charge
     }
 };
 
+struct Ns2LocalCharge
+{
+    ModulePW::PW_Basis rhopw;
+    Charge chr;
+
+    Ns2LocalCharge()
+    {
+        rhopw.nrxx = 1;
+        rhopw.npw = 1;
+        rhopw.nmaxgr = 1;
+        rhopw.nxyz = 1;
+        rhopw.gcar = new ModuleBase::Vector3<double>[1];
+        rhopw.gcar[0] = 0.0;
+
+        chr.rhopw = &rhopw;
+        chr.rho = new double*[2];
+        chr.rhog = new std::complex<double>*[2];
+        for (int is = 0; is < 2; ++is)
+        {
+            chr.rho[is] = new double[1];
+            chr.rhog[is] = new std::complex<double>[1];
+            chr.rhog[is][0] = 0.0;
+        }
+        chr.rho_core = new double[1];
+        chr.rhog_core = new std::complex<double>[1];
+        chr.rho_core[0] = 0.0;
+        chr.rhog_core[0] = 0.0;
+    }
+};
+
 // run XC_Functional::v_xc for nspin=4 with noncollinear magnetism
 std::tuple<double, double, ModuleBase::matrix> run_vxc_nspin4(
     const std::string& functional,
@@ -785,6 +819,157 @@ TEST(GgaGradVxc, LibxcLowLevelContinuousB2IsRejected)
 
     EXPECT_NO_THROW(run_low_level(2));
     EXPECT_THROW(run_low_level(3), std::domain_error);
+}
+
+TEST(GgaGradVxc, LibxcDensityFloorDifferentiatesTheWeightedEnergy)
+{
+    constexpr double density_threshold = 1.0e-6;
+    Ns2LocalCharge mock;
+    mock.chr.rho[0][0] = 2.0 * density_threshold;
+    mock.chr.rho[1][0] = 0.5 * density_threshold;
+    const std::vector<int> func_ids = {XC_LDA_X};
+    const std::map<int, double> scaled = {{XC_LDA_X, 0.37}};
+    const std::map<int, double>* scaling_cases[] = {nullptr, &scaled};
+    const auto evaluate = [&](const std::map<int, double>* scaling_factor)
+    {
+        return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                               1,
+                                               1.0,
+                                               1.0,
+                                               &mock.chr,
+                                               2,
+                                               false,
+                                               false,
+                                               0,
+                                               scaling_factor,
+                                               0.0,
+                                               0.0);
+    };
+
+    for (const std::map<int, double>* scaling_factor : scaling_cases)
+    {
+        const auto reference = evaluate(scaling_factor);
+        double analytic = std::get<2>(reference)(1, 0);
+        Parallel_Reduce::reduce_pool(analytic);
+        if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+        {
+            std::cout << std::setprecision(17)
+                      << "XC_SANITIZER_REFERENCE case=density_floor"
+                      << " scaled=" << (scaling_factor != nullptr)
+                      << " energy=" << std::get<0>(reference)
+                      << " vtxc=" << std::get<1>(reference)
+                      << " analytic=" << analytic << std::endl;
+        }
+        const double original = mock.chr.rho[1][0];
+        const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
+        for (const double step : steps)
+        {
+            mock.chr.rho[1][0] = original + step;
+            const double energy_plus = std::get<0>(evaluate(scaling_factor));
+            mock.chr.rho[1][0] = original - step;
+            const double energy_minus = std::get<0>(evaluate(scaling_factor));
+            mock.chr.rho[1][0] = original;
+
+            const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
+            if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+            {
+                std::cout << std::setprecision(17)
+                          << "XC_SANITIZER_FD case=density_floor"
+                          << " scaled=" << (scaling_factor != nullptr)
+                          << " eps=" << step
+                          << " analytic=" << analytic
+                          << " finite_difference=" << finite_difference
+                          << " absolute_error=" << std::abs(analytic - finite_difference)
+                          << std::endl;
+            }
+            const double scale = std::max(1.0, std::max(std::abs(analytic),
+                                                        std::abs(finite_difference)));
+            EXPECT_NEAR(analytic, finite_difference, 2.0e-8 * scale)
+                << "step=" << step
+                << ", scaled=" << (scaling_factor != nullptr);
+        }
+    }
+}
+
+TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
+{
+    constexpr double density_threshold = 1.0e-6;
+    Ns4Charge mock(0);
+    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
+    {
+        mock.chr.rho[0][ir] = 0.45;
+        mock.chr.rho[1][ir] = 0.0;
+        mock.chr.rho[2][ir] = 0.0;
+        mock.chr.rho[3][ir] = 0.45 - density_threshold;
+    }
+    const std::vector<int> func_ids = {XC_LDA_X};
+    const int gga_grad_modes[] = {0, 2};
+    for (const int gga_grad : gga_grad_modes)
+    {
+        const auto evaluate = [&, gga_grad]()
+        {
+            return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                                   gga_grad_nrxx,
+                                                   mock.ucell.omega,
+                                                   mock.ucell.tpiba,
+                                                   &mock.chr,
+                                                   4,
+                                                   true,
+                                                   false,
+                                                   gga_grad,
+                                                   nullptr,
+                                                   0.0,
+                                                   0.0);
+        };
+
+        const auto reference = evaluate();
+        const int components[] = {0, 3};
+        const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
+        for (const int component : components)
+        {
+            double analytic = std::get<2>(reference)(component, 0);
+            Parallel_Reduce::reduce_pool(analytic);
+            if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+            {
+                std::cout << std::setprecision(17)
+                          << "XC_SANITIZER_REFERENCE case=nspin4_near_saturation"
+                          << " gga_grad=" << gga_grad
+                          << " component=" << component
+                          << " energy=" << std::get<0>(reference)
+                          << " vtxc=" << std::get<1>(reference)
+                          << " analytic=" << analytic << std::endl;
+            }
+            const double original = mock.chr.rho[component][0];
+            for (const double step : steps)
+            {
+                mock.chr.rho[component][0] = original + step;
+                const double energy_plus = std::get<0>(evaluate());
+                mock.chr.rho[component][0] = original - step;
+                const double energy_minus = std::get<0>(evaluate());
+                mock.chr.rho[component][0] = original;
+
+                const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
+                if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+                {
+                    std::cout << std::setprecision(17)
+                              << "XC_SANITIZER_FD case=nspin4_near_saturation"
+                              << " gga_grad=" << gga_grad
+                              << " component=" << component
+                              << " eps=" << step
+                              << " analytic=" << analytic
+                              << " finite_difference=" << finite_difference
+                              << " absolute_error=" << std::abs(analytic - finite_difference)
+                              << std::endl;
+                }
+                const double scale = std::max(1.0, std::max(std::abs(analytic),
+                                                            std::abs(finite_difference)));
+                EXPECT_NEAR(analytic, finite_difference, 2.0e-8 * scale)
+                    << "gga_grad=" << gga_grad
+                    << ", component=" << component
+                    << ", step=" << step;
+            }
+        }
+    }
 }
 
 // for LIBXC, gga_grad=0 and 1 both keep the original collinear algorithm

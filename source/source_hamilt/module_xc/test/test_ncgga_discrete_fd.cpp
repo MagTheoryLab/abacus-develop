@@ -1,5 +1,6 @@
 #include "../xc_functional.h"
 #include "../xc_functional_ncgga_sf.h"
+#include "../libxc_abacus.h"
 
 #include "source_base/constants.h"
 #include "source_base/matrix3.h"
@@ -46,6 +47,17 @@ double pool_min(const double local)
 #ifdef __MPI
     double global = 0.0;
     MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MIN, POOL_WORLD);
+    return global;
+#else
+    return local;
+#endif
+}
+
+double pool_max(const double local)
+{
+#ifdef __MPI
+    double global = 0.0;
+    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MAX, POOL_WORLD);
     return global;
 #else
     return local;
@@ -195,6 +207,135 @@ TEST_F(RealPwNcgga, GradAndDivAreNegativeAdjoints)
                   << " scaled_error=" << std::abs(identity) / norm << '\n';
     }
 }
+
+#ifdef __LIBXC
+TEST_F(RealPwNcgga, LibxcOrdinaryGgaSigmaFloorDifferentiatesTheWeightedEnergy)
+{
+    const int functional_id = XC_GGA_X_HJS_B88_V2;
+    xc_func_type threshold_probe;
+    ASSERT_EQ(xc_func_init(&threshold_probe, functional_id, XC_UNPOLARIZED), 0);
+    const double density_floor = threshold_probe.dens_threshold;
+    const double sigma_floor
+        = threshold_probe.sigma_threshold * threshold_probe.sigma_threshold;
+    xc_func_end(&threshold_probe);
+    ASSERT_GT(density_floor, 0.0);
+    ASSERT_GT(sigma_floor, 0.0);
+
+    std::vector<double> density(pw.nrxx);
+    std::vector<double> direction(pw.nrxx);
+    std::array<double*, 1> density_ptr = {{density.data()}};
+    std::vector<double> core_density(pw.nrxx, 0.0);
+    std::vector<std::complex<double>> core_density_reciprocal(pw.npw, 0.0);
+
+    const double mean_density = 2.0e-6;
+    const double base_gradient_amplitude = 0.45 * std::sqrt(sigma_floor);
+    const double density_amplitude = base_gradient_amplitude / pw.tpiba;
+    const double steps[] = {4.0e-10, 2.0e-10, 1.0e-10};
+    ASSERT_GT(mean_density - density_amplitude - steps[0],
+              1.10 * density_floor);
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        const int ix = ir / (pw.ny * pw.nplane);
+        const double x = ModuleBase::TWO_PI * static_cast<double>(ix) / pw.nx;
+        direction[ir] = std::cos(x + 0.23);
+        density[ir] = mean_density + density_amplitude * direction[ir];
+    }
+
+    Charge charge;
+    charge.rhopw = &pw;
+    charge.nrxx = pw.nrxx;
+    charge.nxyz = pw.nxyz;
+    charge.ngmc = pw.npw;
+    charge.nspin = 1;
+    charge.rho = density_ptr.data();
+    charge.rho_core = core_density.data();
+    charge.rhog_core = core_density_reciprocal.data();
+
+    const std::vector<int> functionals = {functional_id};
+    const auto evaluate = [&]()
+    {
+        return XC_Functional_Libxc::v_xc_libxc(functionals,
+                                               pw.nrxx,
+                                               pw.omega,
+                                               pw.tpiba,
+                                               &charge,
+                                               1,
+                                               false,
+                                               false,
+                                               0,
+                                               nullptr,
+                                               0.0,
+                                               0.0);
+    };
+
+    const auto maximum_sigma = [&]()
+    {
+        std::vector<std::complex<double>> reciprocal(pw.npw);
+        std::vector<ModuleBase::Vector3<double>> gradient(pw.nrxx);
+        pw.real2recip(density.data(), reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(), gradient.data(), &pw, pw.tpiba);
+        double local_maximum = 0.0;
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            local_maximum = std::max(local_maximum, gradient[ir] * gradient[ir]);
+        }
+        return pool_max(local_maximum);
+    };
+
+    const auto reference = evaluate();
+    double local_analytic = 0.0;
+    for (int ir = 0; ir < pw.nrxx; ++ir)
+    {
+        local_analytic += std::get<2>(reference)(0, ir) * direction[ir];
+    }
+    const double analytic
+        = pw.omega / pw.nxyz * pool_sum(local_analytic);
+
+    const double original_amplitude = density_amplitude;
+    std::array<double, 3> errors = {{0.0, 0.0, 0.0}};
+    for (std::size_t ieps = 0; ieps < 3; ++ieps)
+    {
+        const double step = steps[ieps];
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            density[ir] = mean_density + (original_amplitude + step) * direction[ir];
+        }
+        const double sigma_plus = maximum_sigma();
+        const double energy_plus = std::get<0>(evaluate());
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            density[ir] = mean_density + (original_amplitude - step) * direction[ir];
+        }
+        const double sigma_minus = maximum_sigma();
+        const double energy_minus = std::get<0>(evaluate());
+        for (int ir = 0; ir < pw.nrxx; ++ir)
+        {
+            density[ir] = mean_density + original_amplitude * direction[ir];
+        }
+
+        const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
+        errors[ieps] = std::abs(analytic - finite_difference);
+        EXPECT_LT(std::max(sigma_plus, sigma_minus), 0.60 * sigma_floor);
+        EXPECT_GT(std::min(sigma_plus, sigma_minus), 0.10 * sigma_floor);
+        EXPECT_NEAR(analytic, finite_difference, 2.0e-7)
+            << "step=" << step;
+        if (is_pool_root())
+        {
+            std::cout << std::setprecision(17)
+                      << "LIBXC_SIGMA_FLOOR_FD eps=" << step
+                      << " sigma_floor=" << sigma_floor
+                      << " max_sigma=" << std::max(sigma_plus, sigma_minus)
+                      << " energy=" << std::get<0>(reference)
+                      << " energy_plus=" << energy_plus
+                      << " energy_minus=" << energy_minus
+                      << " analytic=" << analytic
+                      << " finite_difference=" << finite_difference
+                      << " absolute_error=" << errors[ieps] << '\n';
+        }
+    }
+    EXPECT_LE(errors[1], 0.40 * errors[0] + 1.0e-9);
+}
+#endif
 
 TEST_F(RealPwNcgga, BuiltinContinuousB2HasNondegenerateTransverseEnergy)
 {

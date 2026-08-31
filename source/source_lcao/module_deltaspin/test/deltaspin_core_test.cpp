@@ -4,6 +4,9 @@
 #include <vector>
 #include <algorithm>
 
+#include "source_lcao/module_deltaspin/mi_tools.h"
+#include "source_lcao/module_operator_lcao/dspin_tools.h"
+
 /***********************************************************************
  * Unit tests for DeltaSpin core algorithms.
  *
@@ -31,11 +34,8 @@ struct Vec3i { int x, y, z; };
 
 static Vec3 pauli_to_moment(const std::complex<double> occ[4], double weight)
 {
-    return {
-        weight * (occ[1] + occ[2]).real(),
-        weight * (occ[1] - occ[2]).imag(),
-        weight * (occ[0] - occ[3]).real()
-    };
+    const ModuleBase::Vector3<double> moment = spinconstrain::pauli_to_moment(occ, weight);
+    return {moment.x, moment.y, moment.z};
 }
 
 class PauliToMomentTest : public ::testing::Test
@@ -96,8 +96,8 @@ TEST_F(PauliToMomentTest, GeneralCase_AllComponents)
 // 2. calculate_delta_hcc: Pauli matrix expansion
 //
 // npol=2: H += becp^H * lambda * becp
-//   lambda in Pauli basis: |lambda_z    lambda_x+i*lambda_y|
-//                          |lambda_x-i*lambda_y   -lambda_z |
+//   lambda in Pauli basis: |lambda_z              lambda_x-i*lambda_y|
+//                          |lambda_x+i*lambda_y   -lambda_z             |
 //
 // npol=1: H += becp^H * lambda_z * sign * becp
 // =====================================================================
@@ -110,10 +110,8 @@ class DeltaHCCTest : public ::testing::Test
         const std::vector<std::complex<double>>& becp,
         const Vec3& delta_lambda, int nbands, int nkb, int npol)
     {
-        const std::complex<double> c0(delta_lambda.z, 0.0);
-        const std::complex<double> c1(delta_lambda.x, delta_lambda.y);
-        const std::complex<double> c2(delta_lambda.x, -delta_lambda.y);
-        const std::complex<double> c3(-delta_lambda.z, 0.0);
+        const ModuleBase::Vector3<double> lambda(delta_lambda.x, delta_lambda.y, delta_lambda.z);
+        const std::array<std::complex<double>, 4> matrix = hamilt::deltaspin::lambda_to_spinor_matrix(lambda);
         for (int ib = 0; ib < nbands * npol; ib += npol)
         {
             for (int ip = 0; ip < nkb; ip++)
@@ -121,8 +119,8 @@ class DeltaHCCTest : public ::testing::Test
                 const int becpind = ib * nkb + ip;
                 const std::complex<double> b1 = becp[becpind];
                 const std::complex<double> b2 = becp[becpind + nkb];
-                ps[becpind] += c0 * b1 + c2 * b2;
-                ps[becpind + nkb] += c1 * b1 + c3 * b2;
+                ps[becpind] += matrix[0] * b1 + matrix[1] * b2;
+                ps[becpind + nkb] += matrix[2] * b1 + matrix[3] * b2;
             }
         }
     }
@@ -172,6 +170,31 @@ TEST_F(DeltaHCCTest, Npol2_PureX)
     // c1 = c2 = (3,0); ps_up = 3, ps_dn = 3
     EXPECT_NEAR(ps[0].real(), 3.0, 1e-15);
     EXPECT_NEAR(ps[1].real(), 3.0, 1e-15);
+}
+
+TEST_F(DeltaHCCTest, Npol2_PureYUsesNegativeImaginaryUpDown)
+{
+    const ModuleBase::Vector3<double> lambda(0.0, 1.0, 0.0);
+    const std::array<std::complex<double>, 4> matrix = hamilt::deltaspin::lambda_to_spinor_matrix(lambda);
+    EXPECT_EQ(matrix[0], std::complex<double>(0.0, 0.0));
+    EXPECT_EQ(matrix[1], std::complex<double>(0.0, -1.0));
+    EXPECT_EQ(matrix[2], std::complex<double>(0.0, 1.0));
+    EXPECT_EQ(matrix[3], std::complex<double>(0.0, 0.0));
+
+    // The lower eigenstate of +lambda_y*sigma_y has physical My=-1,
+    // so increasing a positive lambda_y provides negative feedback on My.
+    const double inv_sqrt_two = 1.0 / std::sqrt(2.0);
+    const std::complex<double> up(0.0, inv_sqrt_two);
+    const std::complex<double> down(inv_sqrt_two, 0.0);
+    std::complex<double> occ[4] = {
+        std::conj(up) * up,
+        std::conj(up) * down,
+        std::conj(down) * up,
+        std::conj(down) * down};
+    const ModuleBase::Vector3<double> moment = spinconstrain::pauli_to_moment(occ, 1.0);
+    EXPECT_NEAR(moment.x, 0.0, 1e-15);
+    EXPECT_NEAR(moment.y, -1.0, 1e-15);
+    EXPECT_NEAR(moment.z, 0.0, 1e-15);
 }
 
 TEST_F(DeltaHCCTest, Npol1_SpinUpPositive)

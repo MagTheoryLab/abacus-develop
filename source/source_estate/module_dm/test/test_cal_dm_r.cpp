@@ -19,6 +19,35 @@
 int test_size = 10;
 int test_nw = 10;
 
+TEST(DensityMatrixTools, ConvertsTransposedSpinDensityToPositiveYMoment)
+{
+    // ABACUS stores D_ij = C_i^* C_j.  For the +y spinor
+    // C = (1, i) / sqrt(2), D_ud = +i/2 and D_du = -i/2.
+    const std::complex<double> spin_density[4]
+        = {{0.5, 0.0}, {0.0, 0.5}, {0.0, -0.5}, {0.5, 0.0}};
+    const int step_trace[4] = {0, 1, 2, 3};
+
+    double pauli_real[4] = {0.0, 0.0, 0.0, 0.0};
+    DensityMatrix_Tools::func_xyz_to_updown(spin_density,
+                                             0,
+                                             step_trace,
+                                             pauli_real);
+    EXPECT_DOUBLE_EQ(pauli_real[0], 1.0);
+    EXPECT_DOUBLE_EQ(pauli_real[1], 0.0);
+    EXPECT_DOUBLE_EQ(pauli_real[2], 1.0);
+    EXPECT_DOUBLE_EQ(pauli_real[3], 0.0);
+
+    std::complex<double> pauli_complex[4] = {};
+    DensityMatrix_Tools::func_xyz_to_updown(spin_density,
+                                             0,
+                                             step_trace,
+                                             pauli_complex);
+    EXPECT_EQ(pauli_complex[0], std::complex<double>(1.0, 0.0));
+    EXPECT_EQ(pauli_complex[1], std::complex<double>(0.0, 0.0));
+    EXPECT_EQ(pauli_complex[2], std::complex<double>(1.0, 0.0));
+    EXPECT_EQ(pauli_complex[3], std::complex<double>(0.0, 0.0));
+}
+
 class DMTest : public testing::Test
 {
   protected:

@@ -272,7 +272,7 @@ OBJS_ELECSTAT_LCAO=elecstate_lcao.o\
       cal_dm_psi.o\
       cal_edm_tddft.o\
 
-OBJS_ESOLVER=esolver.o\
+OBJS_ESOLVER=esolver_factory.o\
     esolver_ks.o\
     esolver_fp.o\
     esolver_ks_pw.o\
@@ -470,7 +470,7 @@ OBJS_PSI_INITIALIZER=psi_base.o\
                      psi_init_atomic.o\
                      psi_init_atom_rand.o\
                      psi_init_nao.o\
-                     psi_init_nao_random.o\
+                     psi_init_nao_random.o
 
 OBJS_PW=fft_bundle.o\
     fft_cpu.o\
@@ -552,6 +552,7 @@ OBJS_IO=module_parameter/input_conv.o\
     cal_test.o\
     module_dos/write_dos_pw.o\
     nscf_fermi_surf.o\
+    band_parallel_output.o\
     write_bands.o\
     module_dos/cal_dos.o\
     module_dos/cal_pdos_gamma.o\
@@ -690,7 +691,6 @@ OBJS_LCAO=evolve_elec.o\
       center2orb_orb21.o\
       center2orb_orb22.o\
       record_adj.o\
-      wavefunc_in_pw.o\
 
 OBJS_MODULE_RI=conv_coulomb_pot_k.o\
       exx_abfs-abfs_index.o\
@@ -723,7 +723,12 @@ OBJS_SRCPW=h_ewald_pw.o\
     dnrm2.o\
     vl_pw.o\
     vnl_pw.o\
+    vnl_pw_alpha.o\
+    vnl_pw_deeq.o\
+    vnl_pw_getvnl.o\
     vnl_pw_grad.o\
+    vnl_pw_init_vnl.o\
+    vnl_pw_qrad.o\
     chgmixing.o\
     charge.o\
     charge_init.o\
@@ -740,6 +745,10 @@ OBJS_SRCPW=h_ewald_pw.o\
     setup_pwrho.o\
     setup_pwwfc.o\
     update_cell_pw.o\
+    dftu_base.o\
+    dftu_output.o\
+    dftu_tools_pw.o\
+    dftu_cal_occ_pw.o\
     setup_dftu_pw.o\
     deltaspin_pw.o\
     force_pw.o\
@@ -808,9 +817,8 @@ OBJS_DFTU=dftu.o\
       dftu_force.o\
       dftu_yukawa.o\
       dftu_folding.o\
-      dftu_io.o\
       dftu_tools.o\
-      dftu_occup.o\
+      dftu_lcao_occ.o\
       dftu_hamilt.o\
       setup_dftu_pw.o
 

@@ -300,9 +300,12 @@ void ReadInput::item_system()
                           "will be distributed among";
         item.category = "System variables";
         item.type = "Integer";
-        item.description = "Divide all processors into kpar groups, and k points will be distributed among each group. "
-                          "The value taken should be less than or equal to the number of k points as well as the number of MPI processes.";
+        item.description = R"(Controls k-point parallelism. The value must be positive and should not exceed either the number of k-points or the number of MPI processes.
+* For PW calculations, divide all MPI processes into persistent k-point pools. Each pool stores and processes a subset of the k-points.
+* For LCAO calculations with lapack, genelpa, elpa, or scalapack_gvx, divide the diagonalization work into temporary k-point pools. After diagonalization, the eigenvalues and distributed wavefunctions are restored for all k-points before occupations, density matrices, and output are evaluated.
+* Multi-process LCAO cusolver uses its own active-GPU distribution and does not use this value to define its k-point layout. Other LCAO eigensolvers do not use the temporary k-point-pool implementation.)";
         item.default_value = "1";
+        item.unit = "";
         read_sync_int(input.kpar);
         item.reset_value = [](const Input_Item& item, Parameter& para) {
 #ifdef __LCAO
@@ -326,25 +329,24 @@ void ReadInput::item_system()
             }
 #endif
         };
-        item.check_value = [](const Input_Item& item, const Parameter& para) {
-            if (para.input.basis_type == "lcao" && para.input.kpar > 1)
-            {
-                ModuleBase::WARNING("ReadInput", "kpar > 1 has not been supported for lcao calculation.");
-            }
-        };
         this->add_item(item);
         add_int_bcast(sys.kpar_lcao);
     }
     {
         Input_Item item("bndpar");
-        item.annotation = "devide all processors into bndpar groups and bands "
-                          "will be distributed among each group";
+        item.annotation = "divide each k-point pool into band-parallel groups";
         item.category = "System variables";
         item.type = "Integer";
-        item.description = "Divide all processors into bndpar groups for SDFT or the BPCG solver. bndpar must be "
-                           "positive, no greater than the number of MPI processes, and kpar * bndpar must divide "
-                           "the number of MPI processes exactly.";
+        item.description = R"(Controls band-group parallelism for PW SDFT and PW KSDFT calculations using the BPCG eigensolver.
+* Within each k-point pool, divide the MPI processes into bndpar band groups. Each group contains NPROC / (kpar * bndpar) processes when bndpar is greater than 1.
+* With BPCG, distribute contiguous ranges of global Kohn-Sham bands among the band groups. nbands does not need to be divisible by bndpar, but bndpar cannot exceed a positive nbands. Groups with lower indices receive one additional band when necessary.
+* In SDFT, distribute stochastic orbitals among the band groups. When the deterministic Kohn-Sham eigensolver is not BPCG, band group 0 calculates the deterministic orbitals and broadcasts them to the other groups.
+* bndpar must be positive and no greater than the number of MPI processes. When bndpar is greater than 1, kpar * bndpar must divide the number of MPI processes exactly.
+[NOTE] For PW calculations on GPU, if the input kpar * bndpar differs from the number of MPI processes, ABACUS automatically sets the effective kpar to NPROC / bndpar.)";
         item.default_value = "1";
+        item.unit = "";
+        item.set_availability("(basis_type==pw and esolver_type==sdft) or "
+                              "(basis_type==pw and esolver_type==ksdft and ks_solver==bpcg)");
         read_sync_int(input.bndpar);
         item.check_value = [](const Input_Item& item, const Parameter& para) {
             if (para.input.bndpar <= 0)
@@ -441,18 +443,23 @@ Theory: G. Makov and M. C. Payne, Phys. Rev. B 51, 4014 (1995).)";
                           "'atomic+random', 'random' or";
         item.category = "System variables";
         item.type = "String";
-        item.description = R"(The type of the starting wave functions.
+        item.description = R"(The method used to initialize wavefunction coefficients. The available options and behavior depend on `basis_type`.
 
-Available options are:
-* atomic: from atomic pseudo wave functions. If they are not enough, other wave functions are initialized with random numbers.
-* atomic+random: add small random numbers on atomic pseudo-wavefunctions
-* file: from binary files wf*.dat, which are output by setting out_wfc_pw to 2.
-* random: random numbers
-* nao: from numerical atomic orbitals. If they are not enough, other wave functions are initialized with random numbers.
-* nao+random: add small random numbers on numerical atomic orbitals
+For `basis_type=pw`, the available options are:
+* `atomic`: Use atomic pseudo wavefunctions from `PP_PSWFC`. If no `PP_PSWFC` states are available, all bands are initialized randomly. If the number of atomic states is smaller than `nbands`, the remaining bands are initialized randomly.
+* `atomic+random`: If there are at least `nbands` atomic states, apply an approximately 5% multiplicative random perturbation to the atomic initialization. If there are fewer atomic states than `nbands`, use the atomic states and initialize the remaining bands randomly, as for `atomic`.
+* `random`: Initialize all bands with random coefficients.
+* `nao`: Use numerical atomic orbitals. If the number of NAO states is smaller than `nbands`, the remaining bands are initialized randomly.
+* `nao+random`: Apply an approximately 5% multiplicative random perturbation to the NAO initialization; any bands not covered by NAO states are first initialized randomly.
+* `file`: Read binary `wf*_pw.dat` files generated with `out_wfc_pw=2` from `read_file_dir`. The files must match the current k points, `nbands`, plane-wave layout, and lattice.
 
-[NOTE] Only the file option is useful for the lcao basis set, which is mostly used when calculation is set to get_wf and get_pchg.)";
+For `basis_type=lcao`, only `file` triggers reading existing wavefunctions. It reads text `wf*_nao.txt` files generated with `out_wfc_lcao=1` from `read_file_dir`; binary files generated with `out_wfc_lcao=2` are not supported. The files must use a compatible NAO basis, match the current k-point and spin setup, and contain enough bands. Normal `init_wfc=file` reading matches files written with the default `out_app_flag=true`, which have no geometry-step index. Files written under `WFC/` with a `g*` geometry-step index when `out_app_flag=false` are not matched automatically.
+
+For `basis_type=lcao_in_pw`, `init_wfc` is automatically set to `nao`.
+
+[NOTE] For `calculation=get_wf` or `calculation=get_pchg`, `init_wfc` is automatically set to `file`. If `basis_type=lcao_in_pw` is also used, the final value is `nao`.)";
         item.default_value = "atomic";
+        item.unit = "";
         item.reset_value = [](const Input_Item& item, Parameter& para) {
             if (para.input.calculation == "get_pchg" || para.input.calculation == "get_wf")
             {

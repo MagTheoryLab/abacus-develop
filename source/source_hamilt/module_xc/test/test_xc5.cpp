@@ -8,6 +8,10 @@
 #include "source_cell/cal_ux.h"
 #include "../../../source_base/parallel_reduce.h"
 
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <map>
 #include <stdexcept>
 
 /************************************************
@@ -359,8 +363,9 @@ TEST_F(XCTest_VXC_meta, set_xc_type)
  *  unit tests for the gga_grad keyword (nspin=4
  *  noncollinear GGA gradient methods)
  *
- *  Method 2 uses projected spin-up/down gradients:
- *    gga_grad=2 (projected): v_mu -= m_hat_mu * div((h_up - h_dn)/2)
+ *  Method 2 differentiates the complete discrete local-spin-map and FFT
+ *  gradient graph.  Its reverse is tested on a real PW grid in
+ *  test_ncgga_discrete_fd.cpp.
  *  Method 3 uses the continuous B2 invariants, including transverse
  *  magnetization-gradient power and the local response of m_hat.
  ***********************************************/
@@ -431,6 +436,80 @@ struct Ns4Charge
             chr.rhog_core[i] = 0;
             rhopw.gcar[i] = 1;
         }
+    }
+};
+
+TEST(GgaGradVxc, LegacyProjectedLibxcReverseIsRejected)
+{
+    Ns4Charge mock(0);
+    const int nspin = 2;
+    const std::vector<double> sgn(gga_grad_nrxx * nspin, 1.0);
+    const std::vector<double> vsigma(gga_grad_nrxx * 3, 0.2);
+    const std::vector<double> mag_part
+        = XC_Functional_Libxc::compute_mag_part_nspin4(
+            gga_grad_nrxx, &mock.chr);
+    const std::tuple<std::vector<double>, std::vector<double>> rho_amag
+        = XC_Functional_Libxc::convert_rho_amag_nspin4(
+            nspin, gga_grad_nrxx, &mock.chr);
+    const std::vector<std::vector<ModuleBase::Vector3<double>>> gdr
+        = XC_Functional_Libxc::cal_gdr_sf(
+            nspin,
+            gga_grad_nrxx,
+            std::get<0>(rho_amag),
+            mag_part,
+            mock.ucell.tpiba,
+            &mock.chr);
+
+    EXPECT_THROW(
+        XC_Functional_Libxc::cal_dh_sf(nspin,
+                                       gga_grad_nrxx,
+                                       sgn,
+                                       gdr,
+                                       vsigma,
+                                       mag_part,
+                                       2,
+                                       mock.ucell.tpiba,
+                                       &mock.chr),
+        std::domain_error);
+    EXPECT_NO_THROW(
+        XC_Functional_Libxc::cal_dh_sf(nspin,
+                                       gga_grad_nrxx,
+                                       sgn,
+                                       gdr,
+                                       vsigma,
+                                       mag_part,
+                                       3,
+                                       mock.ucell.tpiba,
+                                       &mock.chr));
+}
+
+struct Ns2LocalCharge
+{
+    ModulePW::PW_Basis rhopw;
+    Charge chr;
+
+    Ns2LocalCharge()
+    {
+        rhopw.nrxx = 1;
+        rhopw.npw = 1;
+        rhopw.nmaxgr = 1;
+        rhopw.nxyz = 1;
+        rhopw.gcar = new ModuleBase::Vector3<double>[1];
+        rhopw.gcar[0] = 0.0;
+
+        chr.rhopw = &rhopw;
+        chr.rho = new double*[2];
+        chr.rhog = new std::complex<double>*[2];
+        for (int is = 0; is < 2; ++is)
+        {
+            chr.rho[is] = new double[1];
+            chr.rhog[is] = new std::complex<double>[1];
+            chr.rhog[is][0] = 0.0;
+        }
+        chr.rho_core = new double[1];
+        chr.rhog_core = new std::complex<double>[1];
+        chr.rho_core[0] = 0.0;
+        chr.rhog_core[0] = 0.0;
     }
 };
 
@@ -560,60 +639,6 @@ TEST(GgaGradTools, ConvertVNspin4HasMag)
     }
 }
 
-class GgaGradProjectedDh : public testing::Test
-{
-  protected:
-    // dh from the projected gga_grad=2 path.
-    void run(const int pattern,
-             std::vector<std::vector<double>>& dh2,
-             std::vector<double>& mag_part)
-    {
-        Ns4Charge mock(pattern);
-        mag_part = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
-
-        const std::tuple<std::vector<double>, std::vector<double>> rho_amag
-            = XC_Functional_Libxc::convert_rho_amag_nspin4(2, gga_grad_nrxx, &mock.chr);
-        const std::vector<double>& rho = std::get<0>(rho_amag);
-        const std::vector<std::vector<ModuleBase::Vector3<double>>> gdr
-            = XC_Functional_Libxc::cal_gdr_sf(2, gga_grad_nrxx, rho, mag_part, mock.ucell.tpiba, &mock.chr);
-
-        std::vector<double> sgn(gga_grad_nrxx * 2, 1.0);
-        std::vector<double> vsigma(gga_grad_nrxx * 3);
-        for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-        {
-            for (int j = 0; j < 3; ++j)
-            {
-                vsigma[ir * 3 + j] = 0.2 + 0.1 * ir + 0.05 * j;
-            }
-        }
-
-        dh2 = XC_Functional_Libxc::cal_dh_sf(
-            2, gga_grad_nrxx, sgn, gdr, vsigma, mag_part, 2, mock.ucell.tpiba, &mock.chr);
-    }
-};
-
-// for gga_grad=2, dh_mu = m_hat_mu * div((h_up-h_dn)/2), so the magnetic
-// channels satisfy dh_mu = m_hat_mu * (m_hat . dh) exactly
-TEST_F(GgaGradProjectedDh, ProjectedDivergenceIsProjection)
-{
-    std::vector<std::vector<double>> dh2;
-    std::vector<double> mag_part;
-    run(1, dh2, mag_part);
-
-    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-    {
-        double proj = 0.0;
-        for (int mu = 1; mu < 4; ++mu)
-        {
-            proj += mag_part[ir + (mu - 1) * gga_grad_nrxx] * dh2[mu][ir];
-        }
-        for (int mu = 1; mu < 4; ++mu)
-        {
-            EXPECT_NEAR(dh2[mu][ir], mag_part[ir + (mu - 1) * gga_grad_nrxx] * proj, 1e-12);
-        }
-    }
-}
-
 // In the collinear limit with a uniform magnetization direction and no
 // transverse gradients, continuous B2 reduces to the projected method.
 TEST(GgaGradVxc, BuiltinUniformDirectionMethodsAgree)
@@ -699,15 +724,56 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
     }
 }
 
-// A spatially varying magnetization direction carries transverse gradient
-// power in continuous B2, so method 3 must not collapse to method 2.
-TEST(GgaGradVxc, BuiltinContinuousB2RetainsTransverseGradients)
+// The diagonal FFT mock maps every field value at a grid point to a gradient
+// parallel to the same mock reciprocal vector. Consequently
+//   sum_mu |grad m_mu|^2 = |sum_mu m_hat_mu grad m_mu|^2
+// point by point, even when the sampled magnetization direction varies. This
+// mock therefore cannot be used as evidence for transverse B2 energy.
+TEST(GgaGradVxc, BuiltinDiagonalFftMockCannotTestTransverseB2Energy)
 {
+    Ns4Charge mock(1);
+    const std::vector<double> mag_part
+        = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
+    std::vector<std::vector<ModuleBase::Vector3<double>>> grad_m(
+        3, std::vector<ModuleBase::Vector3<double>>(gga_grad_nrxx));
+    std::vector<std::complex<double>> reciprocal(gga_grad_nrxx);
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        mock.rhopw.real2recip(mock.chr.rho[mu + 1], reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(),
+                                grad_m[mu].data(),
+                                &mock.rhopw,
+                                mock.ucell.tpiba);
+    }
+
+    double direction_change = 0.0;
+    double transverse_power = 0.0;
+    for (int mu = 0; mu < 3; ++mu)
+    {
+        const double difference
+            = mag_part[1 + mu * gga_grad_nrxx] - mag_part[mu * gga_grad_nrxx];
+        direction_change += difference * difference;
+    }
+    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
+    {
+        ModuleBase::Vector3<double> grad_magnitude;
+        double component_power = 0.0;
+        for (int mu = 0; mu < 3; ++mu)
+        {
+            component_power += grad_m[mu][ir] * grad_m[mu][ir];
+            grad_magnitude += mag_part[ir + mu * gga_grad_nrxx] * grad_m[mu][ir];
+        }
+        transverse_power += std::abs(component_power - grad_magnitude * grad_magnitude);
+    }
+
+    EXPECT_GT(direction_change, 1.0e-4);
+    EXPECT_LE(transverse_power, 1.0e-12);
+
     const auto r2 = run_vxc_nspin4("PBE", 1, 2);
     const auto r3 = run_vxc_nspin4("PBE", 1, 3);
     EXPECT_TRUE(std::isfinite(std::get<0>(r3)));
     EXPECT_TRUE(std::isfinite(std::get<1>(r3)));
-    EXPECT_GT(std::abs(std::get<0>(r3) - std::get<0>(r2)), 1.0e-10);
+    EXPECT_NEAR(std::get<0>(r3), std::get<0>(r2), 1.0e-12);
 }
 
 // The validated continuous B2 implementation currently uses the built-in
@@ -718,6 +784,183 @@ TEST(GgaGradVxc, LibxcContinuousB2IsRejected)
     const auto r2 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 2);
     EXPECT_EQ(std::get<2>(r2).nr, 4);
     EXPECT_THROW(run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 3), std::domain_error);
+}
+
+// The low-level LibXC entry point is public and can be called without going
+// through XC_Functional::v_xc. It must enforce the same method-3 boundary.
+TEST(GgaGradVxc, LibxcLowLevelContinuousB2IsRejected)
+{
+    Ns4Charge mock(0);
+    const std::vector<int> func_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
+    const auto run_low_level = [&](const int gga_grad)
+    {
+        return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                               gga_grad_nrxx,
+                                               mock.ucell.omega,
+                                               mock.ucell.tpiba,
+                                               &mock.chr,
+                                               4,
+                                               true,
+                                               false,
+                                               gga_grad,
+                                               nullptr,
+                                               0.0,
+                                               0.0);
+    };
+
+    EXPECT_NO_THROW(run_low_level(2));
+    EXPECT_THROW(run_low_level(3), std::domain_error);
+}
+
+TEST(GgaGradVxc, LibxcDensityFloorDifferentiatesTheWeightedEnergy)
+{
+    constexpr double density_threshold = 1.0e-6;
+    Ns2LocalCharge mock;
+    mock.chr.rho[0][0] = 2.0 * density_threshold;
+    mock.chr.rho[1][0] = 0.5 * density_threshold;
+    const std::vector<int> func_ids = {XC_LDA_X};
+    const std::map<int, double> scaled = {{XC_LDA_X, 0.37}};
+    const std::map<int, double>* scaling_cases[] = {nullptr, &scaled};
+    const auto evaluate = [&](const std::map<int, double>* scaling_factor)
+    {
+        return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                               1,
+                                               1.0,
+                                               1.0,
+                                               &mock.chr,
+                                               2,
+                                               false,
+                                               false,
+                                               0,
+                                               scaling_factor,
+                                               0.0,
+                                               0.0);
+    };
+
+    for (const std::map<int, double>* scaling_factor : scaling_cases)
+    {
+        const auto reference = evaluate(scaling_factor);
+        double analytic = std::get<2>(reference)(1, 0);
+        Parallel_Reduce::reduce_pool(analytic);
+        if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+        {
+            std::cout << std::setprecision(17)
+                      << "XC_SANITIZER_REFERENCE case=density_floor"
+                      << " scaled=" << (scaling_factor != nullptr)
+                      << " energy=" << std::get<0>(reference)
+                      << " vtxc=" << std::get<1>(reference)
+                      << " analytic=" << analytic << std::endl;
+        }
+        const double original = mock.chr.rho[1][0];
+        const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
+        for (const double step : steps)
+        {
+            mock.chr.rho[1][0] = original + step;
+            const double energy_plus = std::get<0>(evaluate(scaling_factor));
+            mock.chr.rho[1][0] = original - step;
+            const double energy_minus = std::get<0>(evaluate(scaling_factor));
+            mock.chr.rho[1][0] = original;
+
+            const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
+            if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+            {
+                std::cout << std::setprecision(17)
+                          << "XC_SANITIZER_FD case=density_floor"
+                          << " scaled=" << (scaling_factor != nullptr)
+                          << " eps=" << step
+                          << " analytic=" << analytic
+                          << " finite_difference=" << finite_difference
+                          << " absolute_error=" << std::abs(analytic - finite_difference)
+                          << std::endl;
+            }
+            const double scale = std::max(1.0, std::max(std::abs(analytic),
+                                                        std::abs(finite_difference)));
+            EXPECT_NEAR(analytic, finite_difference, 2.0e-8 * scale)
+                << "step=" << step
+                << ", scaled=" << (scaling_factor != nullptr);
+        }
+    }
+}
+
+TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
+{
+    constexpr double density_threshold = 1.0e-6;
+    Ns4Charge mock(0);
+    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
+    {
+        mock.chr.rho[0][ir] = 0.45;
+        mock.chr.rho[1][ir] = 0.0;
+        mock.chr.rho[2][ir] = 0.0;
+        mock.chr.rho[3][ir] = 0.45 - density_threshold;
+    }
+    const std::vector<int> func_ids = {XC_LDA_X};
+    const int gga_grad_modes[] = {0, 2};
+    for (const int gga_grad : gga_grad_modes)
+    {
+        const auto evaluate = [&, gga_grad]()
+        {
+            return XC_Functional_Libxc::v_xc_libxc(func_ids,
+                                                   gga_grad_nrxx,
+                                                   mock.ucell.omega,
+                                                   mock.ucell.tpiba,
+                                                   &mock.chr,
+                                                   4,
+                                                   true,
+                                                   false,
+                                                   gga_grad,
+                                                   nullptr,
+                                                   0.0,
+                                                   0.0);
+        };
+
+        const auto reference = evaluate();
+        const int components[] = {0, 3};
+        const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
+        for (const int component : components)
+        {
+            double analytic = std::get<2>(reference)(component, 0);
+            Parallel_Reduce::reduce_pool(analytic);
+            if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+            {
+                std::cout << std::setprecision(17)
+                          << "XC_SANITIZER_REFERENCE case=nspin4_near_saturation"
+                          << " gga_grad=" << gga_grad
+                          << " component=" << component
+                          << " energy=" << std::get<0>(reference)
+                          << " vtxc=" << std::get<1>(reference)
+                          << " analytic=" << analytic << std::endl;
+            }
+            const double original = mock.chr.rho[component][0];
+            for (const double step : steps)
+            {
+                mock.chr.rho[component][0] = original + step;
+                const double energy_plus = std::get<0>(evaluate());
+                mock.chr.rho[component][0] = original - step;
+                const double energy_minus = std::get<0>(evaluate());
+                mock.chr.rho[component][0] = original;
+
+                const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
+                if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
+                {
+                    std::cout << std::setprecision(17)
+                              << "XC_SANITIZER_FD case=nspin4_near_saturation"
+                              << " gga_grad=" << gga_grad
+                              << " component=" << component
+                              << " eps=" << step
+                              << " analytic=" << analytic
+                              << " finite_difference=" << finite_difference
+                              << " absolute_error=" << std::abs(analytic - finite_difference)
+                              << std::endl;
+                }
+                const double scale = std::max(1.0, std::max(std::abs(analytic),
+                                                            std::abs(finite_difference)));
+                EXPECT_NEAR(analytic, finite_difference, 2.0e-8 * scale)
+                    << "gga_grad=" << gga_grad
+                    << ", component=" << component
+                    << ", step=" << step;
+            }
+        }
+    }
 }
 
 // for LIBXC, gga_grad=0 and 1 both keep the original collinear algorithm

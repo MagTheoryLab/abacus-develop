@@ -62,7 +62,7 @@ AddTest(
 AddTest(
   TARGET MODULE_HAMILT_XCTest_VXC
   LIBS parameter MPI::MPI_CXX Libxc::xc psi device container
-  SOURCES test_xc5.cpp ../xc_grad.cpp ../xc_functional.cpp
+  SOURCES test_xc5.cpp test_libxc_sanitizer.cpp ../xc_grad.cpp ../xc_functional.cpp
     ../xc_lda_wrap.cpp ../xc_gga_wrap.cpp
     ../libxc_setup.cpp
     ../libxc_lda_wrap.cpp
@@ -72,6 +72,7 @@ AddTest(
     ../xc_lda_exch.cpp ../xc_hcth.cpp
     ../xc_pot.cpp
     ../xc_functional_ncgga_sf.cpp
+    ../xc_ncgga_radial.cpp
     ../libxc_pot.cpp
     ../libxc_tools.cpp
     ../../../source_base/module_external/blas_connector_base.cpp ../../../source_base/module_external/blas_connector_vector.cpp ../../../source_base/module_external/blas_connector_matrix.cpp
@@ -83,6 +84,35 @@ AddTest(
     ../../../source_base/module_fft/fft_bundle.cpp
     ../../../source_base/module_fft/fft_cpu.cpp
     ${FFT_SRC}
+)
+
+AddTest(
+  TARGET MODULE_HAMILT_XCTest_NCGGA_RADIAL
+  SOURCES test_ncgga_radial.cpp ../xc_ncgga_radial.cpp
+)
+
+AddTest(
+  TARGET MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+  LIBS xc_ planewave parameter MPI::MPI_CXX Libxc::xc psi device container base
+  SOURCES test_ncgga_discrete_fd.cpp
+)
+set_tests_properties(
+  MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+  PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1"
+)
+add_test(
+  NAME MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD_MPI2
+  COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+          ${MPIEXEC_PREFLAGS}
+          $<TARGET_FILE:MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD>
+          ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+  MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD_MPI2
+  PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1"
+    PROCESSORS 2
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD>
 )
 
 AddTest(

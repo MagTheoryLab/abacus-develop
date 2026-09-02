@@ -9,7 +9,9 @@ Diag_Cusolver_gvd::Diag_Cusolver_gvd(){
 
     itype = CUSOLVER_EIG_TYPE_1; // A*x = (lambda)*B*x
     jobz = CUSOLVER_EIG_MODE_VECTOR; // compute eigenvalues and eigenvectors.
-    uplo = CUBLAS_FILL_MODE_LOWER;
+    // LCAO follows the LAPACK UPLO='U' contract: only the upper triangle of
+    // the Hermitian H/S matrices is guaranteed to be initialized.
+    uplo = CUBLAS_FILL_MODE_UPPER;
 
     d_A = NULL;
     d_B = NULL;

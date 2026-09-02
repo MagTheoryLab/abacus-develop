@@ -138,6 +138,19 @@ class DiagoPrepare
         return ok;
     }
 
+    void poison_lower_triangle()
+    {
+        for (int col = 0; col < nlocal; ++col)
+        {
+            for (int row = col + 1; row < nlocal; ++row)
+            {
+                const int index = row + col * nlocal;
+                this->h[index] = T(123.0 + row + col);
+                this->s[index] = T(0.0);
+            }
+        }
+    }
+
     void print_hs()
     {
         if (!PRINT_HS)
@@ -293,6 +306,10 @@ TEST_P(DiagoGammaOnlyTest, LCAO)
     std::stringstream out_info;
     DiagoPrepare<double> dp = GetParam();
     ASSERT_TRUE(dp.produce_HS());
+    if (dp.ks_solver == "cusolver")
+    {
+        dp.poison_lower_triangle();
+    }
     dp.diago();
 
     if (dp.myrank == 0)
@@ -325,6 +342,10 @@ TEST_P(DiagoKPointsTest, LCAO)
     std::stringstream out_info;
     DiagoPrepare<std::complex<double>> dp = GetParam();
     ASSERT_TRUE(dp.produce_HS());
+    if (dp.ks_solver == "cusolver")
+    {
+        dp.poison_lower_triangle();
+    }
     dp.diago();
 
     if (dp.myrank == 0)

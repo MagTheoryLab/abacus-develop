@@ -86,7 +86,6 @@ void pw::setup_pwrho(
     pw_rho->collect_local_pw();
 #ifdef __CUDA
     if (inp.device == "gpu"
-        && pw_rho->poolnproc == 1
         && fft_precision == "double")
     {
         pw_rho->setup_gpu_fft_companion();
@@ -119,7 +118,6 @@ void pw::setup_pwrho(
         pw_rhod->collect_local_pw();
 #ifdef __CUDA
         if (inp.device == "gpu"
-            && pw_rhod->poolnproc == 1
             && fft_precision == "double")
         {
             pw_rhod->setup_gpu_fft_companion();

@@ -70,7 +70,7 @@ struct GpuCompanionTransform<double>
                            const bool add,
                            const double factor)
     {
-        if (!basis->has_gpu_fft_companion())
+        if (!basis->has_gpu_fft_companion() || basis->poolnproc != 1)
         {
             return false;
         }
@@ -84,7 +84,7 @@ struct GpuCompanionTransform<double>
                            const bool add,
                            const double factor)
     {
-        if (!basis->has_gpu_fft_companion())
+        if (!basis->has_gpu_fft_companion() || basis->poolnproc != 1)
         {
             return false;
         }
@@ -98,7 +98,7 @@ struct GpuCompanionTransform<double>
                            const bool add,
                            const double factor)
     {
-        if (!basis->has_gpu_fft_companion())
+        if (!basis->has_gpu_fft_companion() || basis->poolnproc != 1)
         {
             return false;
         }
@@ -112,7 +112,7 @@ struct GpuCompanionTransform<double>
                            const bool add,
                            const double factor)
     {
-        if (!basis->has_gpu_fft_companion())
+        if (!basis->has_gpu_fft_companion() || basis->poolnproc != 1)
         {
             return false;
         }

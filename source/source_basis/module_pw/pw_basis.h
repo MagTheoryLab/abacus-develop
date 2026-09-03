@@ -488,6 +488,21 @@ protected:
   std::complex<double>* gpu_fft_complex_real_ = nullptr;
   std::complex<double>* gpu_fft_reciprocal_ = nullptr;
   double* gpu_fft_real_ = nullptr;
+  std::complex<double>* gpu_fft_sticks_ = nullptr;
+  std::complex<double>* gpu_fft_send_ = nullptr;
+  std::complex<double>* gpu_fft_recv_ = nullptr;
+  std::complex<double>* gpu_fft_host_send_ = nullptr;
+  std::complex<double>* gpu_fft_host_recv_ = nullptr;
+  int* gpu_fft_istot2ixy_ = nullptr;
+  int* gpu_fft_numz_ = nullptr;
+  int* gpu_fft_startg_ = nullptr;
+  int* gpu_fft_z_owner_ = nullptr;
+  int* gpu_fft_z_local_ = nullptr;
+
+  void gpu_fft_forward_from_slabs(std::complex<double>* out,
+                                  const bool add,
+                                  const double factor) const;
+  void gpu_fft_backward_to_slabs(const std::complex<double>* in) const;
 #endif
 };
 }

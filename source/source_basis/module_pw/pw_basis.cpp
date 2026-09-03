@@ -4,6 +4,9 @@
 #include "source_base/mymath.h"
 #include "source_base/timer.h"
 #include "source_base/global_function.h"
+#ifdef __CUDA
+#include <cuda_runtime.h>
+#endif
 
 
 namespace ModulePW
@@ -64,6 +67,49 @@ PW_Basis:: ~PW_Basis()
     {
         base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(
             this->gpu_fft_real_);
+    }
+    if (this->gpu_fft_sticks_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            this->gpu_fft_sticks_);
+    }
+    if (this->gpu_fft_send_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            this->gpu_fft_send_);
+    }
+    if (this->gpu_fft_recv_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            this->gpu_fft_recv_);
+    }
+    if (this->gpu_fft_host_send_ != nullptr)
+    {
+        cudaFreeHost(this->gpu_fft_host_send_);
+    }
+    if (this->gpu_fft_host_recv_ != nullptr)
+    {
+        cudaFreeHost(this->gpu_fft_host_recv_);
+    }
+    if (this->gpu_fft_istot2ixy_ != nullptr)
+    {
+        delmem_int_op()(this->gpu_fft_istot2ixy_);
+    }
+    if (this->gpu_fft_numz_ != nullptr)
+    {
+        delmem_int_op()(this->gpu_fft_numz_);
+    }
+    if (this->gpu_fft_startg_ != nullptr)
+    {
+        delmem_int_op()(this->gpu_fft_startg_);
+    }
+    if (this->gpu_fft_z_owner_ != nullptr)
+    {
+        delmem_int_op()(this->gpu_fft_z_owner_);
+    }
+    if (this->gpu_fft_z_local_ != nullptr)
+    {
+        delmem_int_op()(this->gpu_fft_z_local_);
     }
 #endif
 }

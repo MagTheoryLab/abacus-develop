@@ -692,7 +692,6 @@ bool try_v_xc_ncgga_sf_builtin_gpu(
     if (chr == nullptr
         || chr->rhopw == nullptr
         || nrxx != chr->rhopw->nrxx
-        || chr->rhopw->poolnproc != 1
         || !chr->rhopw->has_gpu_fft_companion()
         || !get_pbe_family(functional_ids, family))
     {

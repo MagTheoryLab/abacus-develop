@@ -350,6 +350,24 @@ void gatherv_data(const std::complex<float>* sendbuf, int sendcount, std::comple
 {
     MPI_Allgatherv(sendbuf, sendcount, MPI_COMPLEX, recvbuf, recvcounts, displs, MPI_COMPLEX, comm);
 }
+void alltoallv_data(const std::complex<double>* sendbuf,
+                    const int* sendcounts,
+                    const int* senddispls,
+                    std::complex<double>* recvbuf,
+                    const int* recvcounts,
+                    const int* recvdispls,
+                    const MPI_Comm& comm)
+{
+    MPI_Alltoallv(sendbuf,
+                  sendcounts,
+                  senddispls,
+                  MPI_DOUBLE_COMPLEX,
+                  recvbuf,
+                  recvcounts,
+                  recvdispls,
+                  MPI_DOUBLE_COMPLEX,
+                  comm);
+}
 
 #ifndef __CUDA_MPI
 template <typename T>

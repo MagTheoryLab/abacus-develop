@@ -31,6 +31,13 @@ void gatherv_data(const double* sendbuf, int sendcount, double* recvbuf, const i
 void gatherv_data(const std::complex<double>* sendbuf, int sendcount, std::complex<double>* recvbuf, const int* recvcounts, const int* displs, MPI_Comm& comm);
 void gatherv_data(const float* sendbuf, int sendcount, float* recvbuf, const int* recvcounts, const int* displs, MPI_Comm& comm);
 void gatherv_data(const std::complex<float>* sendbuf, int sendcount, std::complex<float>* recvbuf, const int* recvcounts, const int* displs, MPI_Comm& comm);
+void alltoallv_data(const std::complex<double>* sendbuf,
+                    const int* sendcounts,
+                    const int* senddispls,
+                    std::complex<double>* recvbuf,
+                    const int* recvcounts,
+                    const int* recvdispls,
+                    const MPI_Comm& comm);
 
 #if defined(__NCCL_PARALLEL_DEVICE)
 void nccl_bcast_data(double* object, const int& n, MPI_Comm& comm, int root = 0);
@@ -208,6 +215,48 @@ void gatherv_dev(const T* sendbuf,
     o2.del(recvbuf_cpu);
 #endif
     return;
+}
+
+template <typename T, typename Device>
+void alltoallv_dev(const T* sendbuf,
+                   const int* sendcounts,
+                   const int* senddispls,
+                   T* recvbuf,
+                   const int* recvcounts,
+                   const int* recvdispls,
+                   const int comm_size,
+                   const MPI_Comm& comm,
+                   T* tmp_sendbuf = nullptr,
+                   T* tmp_recvbuf = nullptr)
+{
+#ifdef __CUDA_MPI
+    alltoallv_data(sendbuf,
+                   sendcounts,
+                   senddispls,
+                   recvbuf,
+                   recvcounts,
+                   recvdispls,
+                   comm);
+#else
+    const int send_size
+        = senddispls[comm_size - 1] + sendcounts[comm_size - 1];
+    const int recv_size
+        = recvdispls[comm_size - 1] + recvcounts[comm_size - 1];
+    object_cpu_point<T, Device> send_staging;
+    object_cpu_point<T, Device> recv_staging;
+    T* host_sendbuf = send_staging.get(sendbuf, send_size, tmp_sendbuf);
+    T* host_recvbuf = recv_staging.get_buffer(recvbuf, recv_size, tmp_recvbuf);
+    alltoallv_data(host_sendbuf,
+                   sendcounts,
+                   senddispls,
+                   host_recvbuf,
+                   recvcounts,
+                   recvdispls,
+                   comm);
+    recv_staging.sync_h2d(recvbuf, host_recvbuf, recv_size);
+    send_staging.del(host_sendbuf);
+    recv_staging.del(host_recvbuf);
+#endif
 }
 
 }

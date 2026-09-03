@@ -45,6 +45,7 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                                const Grid_Driver* gridD_in,
                                const TwoCenterIntegrator* intor,
                                const std::vector<double>& orb_cutoff,
+                               const bool use_gpu,
                                Plus_U* p_dftu);
     ~DFTU<OperatorLCAO<TK, TR>>();
 
@@ -73,6 +74,8 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
 
     /// @brief the number of spin components, 1 for no-spin, 2 for collinear spin case and 4 for non-collinear spin case
     int nspin = 0;
+
+    bool use_gpu_ = false;
 
     /**
      * @brief search the nearest neighbor atoms and save them into this->adjs_all
@@ -115,6 +118,12 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                     const std::vector<TR>& pot_onsite_in,
                     TR* data_pointer);
 
+    /// GPU fast path for the non-collinear single-rank occupation and HR contractions.
+    bool contribute_hr_gpu(const Parallel_Orbitals* pv);
+
+    /// Apply the spin-cycle bookkeeping shared by CPU and GPU HR contributions.
+    void finish_hr_contribution();
+
     /**
      * @brief calculate the atomic Force of <I,J,R> atom pair
      */
@@ -148,6 +157,8 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
     bool precal_nlm_done = false;
     /// @brief the overlap values for all [atoms][nerghbors][orb_index(iw) in NAOs][m of target_l in Projectors]
     std::vector<std::vector<std::unordered_map<int, std::vector<double>>>> nlm_tot;
+
+    void* gpu_cache_ = nullptr;
 };
 
 } // namespace hamilt

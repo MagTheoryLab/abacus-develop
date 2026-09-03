@@ -19,6 +19,108 @@ inline int block_end(const int begin, const int size)
 {
     return std::min(begin + pw_transform_cache_block, size);
 }
+
+#ifdef __CUDA
+template <typename FPTYPE>
+struct GpuCompanionTransform
+{
+    static bool real2recip(const PW_Basis*,
+                           const FPTYPE*,
+                           std::complex<FPTYPE>*,
+                           const bool,
+                           const FPTYPE)
+    {
+        return false;
+    }
+
+    static bool real2recip(const PW_Basis*,
+                           const std::complex<FPTYPE>*,
+                           std::complex<FPTYPE>*,
+                           const bool,
+                           const FPTYPE)
+    {
+        return false;
+    }
+
+    static bool recip2real(const PW_Basis*,
+                           const std::complex<FPTYPE>*,
+                           FPTYPE*,
+                           const bool,
+                           const FPTYPE)
+    {
+        return false;
+    }
+
+    static bool recip2real(const PW_Basis*,
+                           const std::complex<FPTYPE>*,
+                           std::complex<FPTYPE>*,
+                           const bool,
+                           const FPTYPE)
+    {
+        return false;
+    }
+};
+
+template <>
+struct GpuCompanionTransform<double>
+{
+    static bool real2recip(const PW_Basis* basis,
+                           const double* in,
+                           std::complex<double>* out,
+                           const bool add,
+                           const double factor)
+    {
+        if (!basis->has_gpu_fft_companion())
+        {
+            return false;
+        }
+        basis->real2recip_gpu_host(in, out, add, factor);
+        return true;
+    }
+
+    static bool real2recip(const PW_Basis* basis,
+                           const std::complex<double>* in,
+                           std::complex<double>* out,
+                           const bool add,
+                           const double factor)
+    {
+        if (!basis->has_gpu_fft_companion())
+        {
+            return false;
+        }
+        basis->real2recip_gpu_host(in, out, add, factor);
+        return true;
+    }
+
+    static bool recip2real(const PW_Basis* basis,
+                           const std::complex<double>* in,
+                           double* out,
+                           const bool add,
+                           const double factor)
+    {
+        if (!basis->has_gpu_fft_companion())
+        {
+            return false;
+        }
+        basis->recip2real_gpu_host(in, out, add, factor);
+        return true;
+    }
+
+    static bool recip2real(const PW_Basis* basis,
+                           const std::complex<double>* in,
+                           std::complex<double>* out,
+                           const bool add,
+                           const double factor)
+    {
+        if (!basis->has_gpu_fft_companion())
+        {
+            return false;
+        }
+        basis->recip2real_gpu_host(in, out, add, factor);
+        return true;
+    }
+};
+#endif
 } // namespace
 
 //     const base_device::DEVICE_CPU* PW_Basis::get_default_device_ctx() {
@@ -58,6 +160,14 @@ void PW_Basis::real2recip(const std::complex<FPTYPE>* in,
                           const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "real2recip");
+
+#ifdef __CUDA
+    if (GpuCompanionTransform<FPTYPE>::real2recip(this, in, out, add, factor))
+    {
+        ModuleBase::timer::end(this->classname, "real2recip");
+        return;
+    }
+#endif
 
     assert(this->gamma_only == false);
     const int nrxx_ = this->nrxx;
@@ -150,6 +260,13 @@ template <typename FPTYPE>
 void PW_Basis::real2recip(const FPTYPE* in, std::complex<FPTYPE>* out, const bool add, const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "real2recip");
+#ifdef __CUDA
+    if (GpuCompanionTransform<FPTYPE>::real2recip(this, in, out, add, factor))
+    {
+        ModuleBase::timer::end(this->classname, "real2recip");
+        return;
+    }
+#endif
     const int nrxx_ = this->nrxx;
     const int npw_ = this->npw;
     const int nxyz_ = this->nxyz;
@@ -276,6 +393,13 @@ void PW_Basis::recip2real(const std::complex<FPTYPE>* in,
                           const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip2real");
+#ifdef __CUDA
+    if (GpuCompanionTransform<FPTYPE>::recip2real(this, in, out, add, factor))
+    {
+        ModuleBase::timer::end(this->classname, "recip2real");
+        return;
+    }
+#endif
     assert(this->gamma_only == false);
     const int nst_ = this->nst;
     const int nz_ = this->nz;
@@ -381,6 +505,13 @@ template <typename FPTYPE>
 void PW_Basis::recip2real(const std::complex<FPTYPE>* in, FPTYPE* out, const bool add, const FPTYPE factor) const
 {
     ModuleBase::timer::start(this->classname, "recip2real");
+#ifdef __CUDA
+    if (GpuCompanionTransform<FPTYPE>::recip2real(this, in, out, add, factor))
+    {
+        ModuleBase::timer::end(this->classname, "recip2real");
+        return;
+    }
+#endif
     const int nst_ = this->nst;
     const int nz_ = this->nz;
     const int npw_ = this->npw;

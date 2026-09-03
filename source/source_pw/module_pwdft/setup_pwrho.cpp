@@ -84,6 +84,14 @@ void pw::setup_pwrho(
     pw_rho->fft_bundle.initfftmode(inp.fft_mode);
     pw_rho->setuptransform();
     pw_rho->collect_local_pw();
+#ifdef __CUDA
+    if (inp.device == "gpu"
+        && pw_rho->poolnproc == 1
+        && fft_precision == "double")
+    {
+        pw_rho->setup_gpu_fft_companion();
+    }
+#endif
     pw_rho->collect_uniqgg();
 
     //! initialize the double grid (for uspp) if necessary
@@ -109,6 +117,14 @@ void pw::setup_pwrho(
         pw_rhod->fft_bundle.initfftmode(inp.fft_mode);
         pw_rhod_sup->setuptransform(pw_rho);
         pw_rhod->collect_local_pw();
+#ifdef __CUDA
+        if (inp.device == "gpu"
+            && pw_rhod->poolnproc == 1
+            && fft_precision == "double")
+        {
+            pw_rhod->setup_gpu_fft_companion();
+        }
+#endif
         pw_rhod->collect_uniqgg();
     }
 
@@ -138,4 +154,3 @@ void pw::teardown_pwrho(bool &pw_rho_flag,
 
    return;
 }
-

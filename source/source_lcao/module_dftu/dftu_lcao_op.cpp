@@ -7,6 +7,15 @@
 #include "source_io/module_parameter/parameter.h"
 #include "source_base/parallel_reduce.h"
 
+#ifdef __CUDA
+#include "dftu_lcao_gpu.h"
+#endif
+
+template <>
+void hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>::transfer_pot_onsite(
+    std::vector<double>& pot_onsite_tmp,
+    std::vector<std::complex<double>>& pot_onsite);
+
 template <typename TK, typename TR>
 hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::DFTU(HS_Matrix_K<TK>* hsk_in,
                                                  const std::vector<ModuleBase::Vector3<double>>& kvec_d_in,
@@ -15,12 +24,14 @@ hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::DFTU(HS_Matrix_K<TK>* hsk_in,
                                                  const Grid_Driver* GridD_in,
                                                  const TwoCenterIntegrator* intor,
                                                  const std::vector<double>& orb_cutoff,
+                                                 const bool use_gpu,
                                                  Plus_U* p_dftu)
     : hamilt::OperatorLCAO<TK, TR>(hsk_in, kvec_d_in, hR_in), intor_(intor), orb_cutoff_(orb_cutoff)
 {
     this->cal_type = calculation_type::lcao_dftu;
     this->ucell = &ucell_in;
     this->dftu = p_dftu;
+    this->use_gpu_ = use_gpu;
 #ifdef __DEBUG
     assert(this->ucell != nullptr);
 #endif
@@ -34,6 +45,10 @@ hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::DFTU(HS_Matrix_K<TK>* hsk_in,
 template <typename TK, typename TR>
 hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::~DFTU()
 {
+#ifdef __CUDA
+    hamilt::dftu_gpu::destroy_cache(this->gpu_cache_);
+    this->gpu_cache_ = nullptr;
+#endif
 }
 
 // initialize_HR()
@@ -168,6 +183,217 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::cal_nlm_all(const Parallel_Orbi
     ModuleBase::timer::end("DFTU", "cal_nlm_all");
 }
 
+template <typename TK, typename TR>
+bool hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contribute_hr_gpu(const Parallel_Orbitals*)
+{
+    return false;
+}
+
+#ifdef __CUDA
+template <>
+bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>::contribute_hr_gpu(
+    const Parallel_Orbitals* pv)
+{
+    if (!this->use_gpu_
+        || this->nspin != 4
+        || pv->nrow != pv->get_global_row_size()
+        || pv->ncol != pv->get_global_col_size())
+    {
+        return false;
+    }
+
+    const hamilt::HContainer<double>* dmr = this->dftu->get_dmr(0);
+    if (dmr == nullptr)
+    {
+        return false;
+    }
+
+    std::vector<std::size_t> onsite_offsets(this->ucell->nat + 1, 0);
+    for (int atom = 0; atom < this->ucell->nat; ++atom)
+    {
+        int type = 0;
+        int type_atom = 0;
+        this->ucell->iat2iait(atom, &type_atom, &type);
+        onsite_offsets[atom + 1] = onsite_offsets[atom];
+        if (this->dftu->has_correlated_orbital(type))
+        {
+            const int projector_size = 2 * this->dftu->get_orbital_corr(type) + 1;
+            onsite_offsets[atom + 1] += 4 * projector_size * projector_size;
+        }
+    }
+    if (onsite_offsets.back() == 0)
+    {
+        return false;
+    }
+
+    if (this->gpu_cache_ == nullptr)
+    {
+        struct AdjacentProjection
+        {
+            std::size_t row_offset;
+            std::size_t col_offset;
+            int row_orbitals;
+            int col_orbitals;
+        };
+
+        std::vector<double> projections;
+        std::vector<hamilt::dftu_gpu::ProjectionTask> tasks;
+        int correlated_index = 0;
+        for (int atom = 0; atom < this->ucell->nat; ++atom)
+        {
+            int type = 0;
+            int type_atom = 0;
+            this->ucell->iat2iait(atom, &type_atom, &type);
+            if (!this->dftu->has_correlated_orbital(type))
+            {
+                continue;
+            }
+            const int projector_size = 2 * this->dftu->get_orbital_corr(type) + 1;
+            AdjacentAtomInfo& adjs = this->adjs_all[correlated_index++];
+            std::vector<AdjacentProjection> adjacent(adjs.adj_num + 1);
+            for (int ad = 0; ad < adjs.adj_num + 1; ++ad)
+            {
+                const int adjacent_atom = this->ucell->itia2iat(adjs.ntype[ad], adjs.natom[ad]);
+                const auto row_indexes = pv->get_indexes_row(adjacent_atom);
+                const auto col_indexes = pv->get_indexes_col(adjacent_atom);
+                AdjacentProjection descriptor;
+                descriptor.row_offset = projections.size();
+                descriptor.row_orbitals = row_indexes.size() / 2;
+                for (int index = 0; index < static_cast<int>(row_indexes.size()); index += 2)
+                {
+                    const auto& values = this->nlm_tot[atom][ad].at(row_indexes[index]);
+                    projections.insert(projections.end(), values.begin(), values.end());
+                }
+                descriptor.col_offset = projections.size();
+                descriptor.col_orbitals = col_indexes.size() / 2;
+                for (int index = 0; index < static_cast<int>(col_indexes.size()); index += 2)
+                {
+                    const auto& values = this->nlm_tot[atom][ad].at(col_indexes[index]);
+                    projections.insert(projections.end(), values.begin(), values.end());
+                }
+                adjacent[ad] = descriptor;
+            }
+
+            for (int ad1 = 0; ad1 < adjs.adj_num + 1; ++ad1)
+            {
+                const int atom1 = this->ucell->itia2iat(adjs.ntype[ad1], adjs.natom[ad1]);
+                const ModuleBase::Vector3<int>& R1 = adjs.box[ad1];
+                for (int ad2 = 0; ad2 < adjs.adj_num + 1; ++ad2)
+                {
+                    const int atom2 = this->ucell->itia2iat(adjs.ntype[ad2], adjs.natom[ad2]);
+                    const ModuleBase::Vector3<int>& R2 = adjs.box[ad2];
+                    const ModuleBase::Vector3<int> R = R2 - R1;
+                    const hamilt::BaseMatrix<double>* dm_matrix
+                        = (dmr == nullptr) ? nullptr : dmr->find_matrix(atom1, atom2, R.x, R.y, R.z);
+                    hamilt::BaseMatrix<std::complex<double>>* hr_matrix
+                        = this->hR->find_matrix(atom1, atom2, R.x, R.y, R.z);
+                    if (dm_matrix == nullptr && hr_matrix == nullptr)
+                    {
+                        continue;
+                    }
+                    hamilt::dftu_gpu::ProjectionTask task;
+                    task.left_offset = adjacent[ad1].row_offset;
+                    task.right_offset = adjacent[ad2].col_offset;
+                    task.dm_offset = (dm_matrix == nullptr)
+                        ? 0 : dm_matrix->get_pointer() - dmr->get_wrapper();
+                    task.hr_offset = (hr_matrix == nullptr)
+                        ? 0 : hr_matrix->get_pointer() - this->hR->get_wrapper();
+                    task.onsite_offset = onsite_offsets[atom];
+                    task.row_orbitals = adjacent[ad1].row_orbitals;
+                    task.col_orbitals = adjacent[ad2].col_orbitals;
+                    task.matrix_cols = pv->get_ncol_atom(atom2);
+                    task.projector_size = projector_size;
+                    task.has_dm = dm_matrix != nullptr;
+                    task.has_hr = hr_matrix != nullptr;
+                    tasks.push_back(task);
+                }
+            }
+        }
+        if (tasks.empty())
+        {
+            return false;
+        }
+        const std::size_t dm_size = dmr->get_nnr();
+        this->gpu_cache_ = hamilt::dftu_gpu::create_cache(projections.data(),
+                                                          projections.size(),
+                                                          tasks.data(),
+                                                          tasks.size(),
+                                                          dm_size,
+                                                          this->hR->get_nnr(),
+                                                          onsite_offsets.back());
+    }
+
+    std::vector<double> occupations(onsite_offsets.back(), 0.0);
+    if (!this->dftu->is_occ_mat_initialized())
+    {
+        hamilt::dftu_gpu::compute_occupations(this->gpu_cache_,
+                                               dmr->get_wrapper(),
+                                               occupations.data());
+    }
+
+    std::vector<std::complex<double>> onsite(onsite_offsets.back(), 0.0);
+    for (int atom = 0; atom < this->ucell->nat; ++atom)
+    {
+        int type = 0;
+        int type_atom = 0;
+        this->ucell->iat2iait(atom, &type_atom, &type);
+        if (!this->dftu->has_correlated_orbital(type))
+        {
+            continue;
+        }
+        const int target_L = this->dftu->get_orbital_corr(type);
+        const int projector_size = 2 * target_L + 1;
+        const std::size_t offset = onsite_offsets[atom];
+        std::vector<double> atom_occ(4 * projector_size * projector_size, 0.0);
+        if (this->dftu->is_occ_mat_initialized())
+        {
+            this->dftu->get_occ_mat_flat(atom, target_L, atom_occ);
+        }
+        else
+        {
+            std::copy(occupations.begin() + offset,
+                      occupations.begin() + onsite_offsets[atom + 1],
+                      atom_occ.begin());
+            this->dftu->set_occ_mat_flat(atom, target_L, this->current_spin, atom_occ);
+        }
+
+        std::vector<double> onsite_pauli(atom_occ.size(), 0.0);
+        double energy = this->dftu->get_energy();
+        this->cal_pot_onsite(atom_occ,
+                             projector_size,
+                             this->dftu->get_u_current(type),
+                             onsite_pauli.data(),
+                             energy);
+        this->dftu->set_energy(energy);
+        std::vector<std::complex<double>> onsite_spinor(atom_occ.size(), 0.0);
+        this->transfer_pot_onsite(onsite_pauli, onsite_spinor);
+        std::copy(onsite_spinor.begin(), onsite_spinor.end(), onsite.begin() + offset);
+    }
+
+    hamilt::dftu_gpu::add_hubbard_hamiltonian(this->gpu_cache_,
+                                               onsite.data(),
+                                               this->hR->get_wrapper());
+    return true;
+}
+#endif
+
+template <typename TK, typename TR>
+void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::finish_hr_contribution()
+{
+    if (this->nspin == 1)
+    {
+        this->dftu->set_double_energy();
+    }
+    if (this->current_spin == this->nspin - 1 || this->nspin == 4)
+    {
+        this->dftu->mark_occ_mat_dirty();
+    }
+    if (this->nspin == 2)
+    {
+        this->current_spin = 1 - this->current_spin;
+    }
+}
+
 // contributeHR()
 /**
  * @brief Contribute DFT+U Hamiltonian to real-space HR matrix
@@ -251,6 +477,13 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
     //    This is reused in both occ and HR calculations
     this->cal_nlm_all(pv);
 
+    if (this->contribute_hr_gpu(pv))
+    {
+        this->finish_hr_contribution();
+        ModuleBase::timer::end("DFTU", "contributeHR");
+        return;
+    }
+
     // 2. Loop over all Hubbard-projector center atoms (iat0)
     int atom_index = 0;
     for (int iat0 = 0; iat0 < this->ucell->nat; iat0++)
@@ -271,7 +504,7 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
         // nspin=4: 4 (Pauli matrix blocks), nspin=1/2: 1 (single spin channel)
         const int spin_fold = (this->nspin == 4) ? 4 : 1;
         std::vector<double> occ(tlp1 * tlp1 * spin_fold, 0.0);
-        
+
         // ============================================================
         // BRANCH 1: Occ_mat NOT initialized (compute from DMR)
         // ============================================================
@@ -423,42 +656,7 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
         ModuleBase::timer::end("DFTU", "cal_pot_onsite");
     }
 
-    // 6. Post-processing: Energy correction and occ_mat state management
-    // For nspin=1: DFT+U energy computed for single spin channel, but should count both spins
-    // set_double_energy() doubles the energy to account for degenerate spin-up/down
-    if (this->nspin == 1) 
-    {
-        this->dftu->set_double_energy();
-    }
-    
-    // 7. Mark occ_mat as dirty to force recomputation in next iteration
-    // This is called when:
-    // - nspin=4: Always (all spins handled simultaneously, current_spin==0==nspin-1)
-    // - nspin=2: When current_spin==1 (after spin-down calculation, last spin channel)
-    // - nspin=1: When current_spin==0==nspin-1 (always called)
-    // 
-    // Purpose: Ensure occ_mat is recomputed from updated DMR in next SCF iteration,
-    // rather than using stale pre-read data from file.
-    // TODO: This logic is confusing. Consider explicit variable like `is_last_spin_channel`.
-    if (this->current_spin == this->nspin - 1 || this->nspin == 4) 
-    {
-        this->dftu->mark_occ_mat_dirty();
-    }
-
-    // 8. Spin channel toggling for nspin=2
-    // nspin=2 requires separate HR updates for spin-up (current_spin=0) and spin-down (current_spin=1)
-    // The HR matrix is updated twice per SCF iteration, once for each spin channel
-    // current_spin toggles: 0 -> 1 -> 0 -> 1 ...
-    // For nspin=1: current_spin always 0 (no toggling needed)
-    // For nspin=4: current_spin always 0 (all spins handled simultaneously via Pauli matrices)
-    // TODO: UNSAFE - This assumes contributeHR() is called in strict alternating order.
-    // If called out of order (e.g., due to parallel k-point distribution), current_spin may be wrong.
-    // TODO: Consider deriving current_spin from ik or explicit parameter instead of toggling.
-    if (this->nspin == 2) 
-    {
-        this->current_spin = 1 - this->current_spin;
-    }
-
+    this->finish_hr_contribution();
     ModuleBase::timer::end("DFTU", "contributeHR");
 }
 

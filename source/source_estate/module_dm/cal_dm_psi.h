@@ -20,6 +20,21 @@ void cal_dm_psi(const Parallel_Orbitals* ParaV,
                 const psi::Psi<std::complex<double>>& wfc,
                 elecstate::DensityMatrix<std::complex<double>, TR>& DM);
 
+#ifdef __CUDA
+/**
+ * @brief Build the complex LCAO density matrix with a single MPI rank on CUDA.
+ *
+ * The LCAO eigensolver interface currently exposes host-owned eigenvectors.
+ * This entry preserves the existing host DensityMatrix interface while moving
+ * the weighted-conjugate transform and the dominant zgemm to the GPU. It is
+ * independent of the selected LCAO eigensolver.
+ */
+void cal_dm_psi_gpu_single_rank(const Parallel_Orbitals* ParaV,
+                                const ModuleBase::matrix& wg,
+                                const psi::Psi<std::complex<double>>& wfc,
+                                elecstate::DensityMatrix<std::complex<double>, double>& DM);
+#endif
+
 #ifdef __MPI
 // for Gamma-Only case with MPI
 void psiMulPsiMpi(const psi::Psi<double>& psi1, const psi::Psi<double>& psi2, double* dm_out, const int* desc_psi, const int* desc_dm);

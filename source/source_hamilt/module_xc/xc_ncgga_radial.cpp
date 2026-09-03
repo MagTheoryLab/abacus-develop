@@ -1,4 +1,5 @@
 #include "xc_ncgga_radial.h"
+#include "xc_ncgga_radial_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,10 +10,14 @@ namespace ModuleXC
 
 double NcggaRadialPoint::jacobian(const int row, const int column) const
 {
-    const double identity = (row == column) ? 1.0 : 0.0;
-    return transverse_hessian * identity
-           + (radial_hessian - transverse_hessian)
-                 * direction[row] * direction[column];
+    NcggaRadialMath::RadialData data;
+    data.transverse_hessian = transverse_hessian;
+    data.radial_hessian = radial_hessian;
+    for (int component = 0; component < 3; ++component)
+    {
+        data.direction[component] = direction[component];
+    }
+    return NcggaRadialMath::radial_jacobian(data, row, column);
 }
 
 NcggaRadialPoint make_ncgga_radial_point(
@@ -24,87 +29,68 @@ NcggaRadialPoint make_ncgga_radial_point(
         throw std::invalid_argument("noncollinear GGA radial eta must be positive");
     }
 
+    const NcggaRadialMath::RadialData data
+        = NcggaRadialMath::make_radial_data(magnetization[0],
+                                             magnetization[1],
+                                             magnetization[2],
+                                             eta);
     NcggaRadialPoint point;
-    const double magnitude
-        = std::sqrt(magnetization[0] * magnetization[0]
-                    + magnetization[1] * magnetization[1]
-                    + magnetization[2] * magnetization[2]);
-    if (magnitude == 0.0)
-    {
-        return point;
-    }
-
+    point.value = data.value;
+    point.transverse_hessian = data.transverse_hessian;
+    point.radial_hessian = data.radial_hessian;
     for (int component = 0; component < 3; ++component)
     {
-        point.direction[component] = magnetization[component] / magnitude;
-    }
-
-    if (magnitude < eta)
-    {
-        const double x = magnitude / eta;
-        const double x2 = x * x;
-        const double x3 = x2 * x;
-        point.value = eta * x3 * (3.0 * x2 - 8.0 * x + 6.0);
-        point.transverse_hessian
-            = x * (15.0 * x2 - 32.0 * x + 18.0) / eta;
-        point.radial_hessian
-            = x * (60.0 * x2 - 96.0 * x + 36.0) / eta;
-    }
-    else
-    {
-        point.value = magnitude;
-        point.transverse_hessian = 1.0 / magnitude;
-        point.radial_hessian = 0.0;
-    }
-
-    for (int component = 0; component < 3; ++component)
-    {
-        point.gradient[component]
-            = point.transverse_hessian * magnetization[component];
+        point.direction[component] = data.direction[component];
+        point.gradient[component] = data.gradient[component];
     }
     return point;
 }
 
 double ncgga_lca_radial_eta()
 {
-    return 1.0e-3;
+    return NcggaRadialMath::lca_radial_eta();
 }
 
 double NcggaSpinMapPoint::jacobian(const int spin, const int channel) const
 {
-    if (channel == 0)
+    NcggaRadialMath::SpinMapData data;
+    data.absolute_density = absolute_density;
+    data.clipped_magnitude = clipped_magnitude;
+    data.density_sign = density_sign;
+    data.saturated = saturated;
+    data.radial.transverse_hessian = radial.transverse_hessian;
+    data.radial.radial_hessian = radial.radial_hessian;
+    for (int component = 0; component < 3; ++component)
     {
-        if (saturated)
-        {
-            return spin == 0 ? density_sign : 0.0;
-        }
-        return 0.5 * density_sign;
+        data.radial.direction[component] = radial.direction[component];
+        data.radial.gradient[component] = radial.gradient[component];
     }
-    if (saturated)
-    {
-        return 0.0;
-    }
-    const double spin_sign = spin == 0 ? 0.5 : -0.5;
-    return spin_sign * radial.gradient[channel - 1];
+    return NcggaRadialMath::spin_map_jacobian(data, spin, channel);
 }
 
 NcggaSpinMapPoint make_ncgga_spin_map_point(
     const double total_density,
     const NcggaRadialPoint& radial)
 {
+    NcggaRadialMath::RadialData radial_data;
+    radial_data.value = radial.value;
+    radial_data.transverse_hessian = radial.transverse_hessian;
+    radial_data.radial_hessian = radial.radial_hessian;
+    for (int component = 0; component < 3; ++component)
+    {
+        radial_data.direction[component] = radial.direction[component];
+        radial_data.gradient[component] = radial.gradient[component];
+    }
+    const NcggaRadialMath::SpinMapData data
+        = NcggaRadialMath::make_spin_map_data(total_density, radial_data);
     NcggaSpinMapPoint point;
     point.radial = radial;
-    point.absolute_density = std::abs(total_density);
-    point.clipped_magnitude
-        = std::min(radial.value, point.absolute_density);
-    point.spin_density[0]
-        = 0.5 * (point.absolute_density + point.clipped_magnitude);
-    point.spin_density[1]
-        = 0.5 * (point.absolute_density - point.clipped_magnitude);
-    point.density_sign = total_density > 0.0 ? 1.0
-                         : total_density < 0.0 ? -1.0
-                                               : 0.0;
-    point.saturated = !(radial.value < point.absolute_density);
+    point.absolute_density = data.absolute_density;
+    point.clipped_magnitude = data.clipped_magnitude;
+    point.spin_density[0] = data.spin_density[0];
+    point.spin_density[1] = data.spin_density[1];
+    point.density_sign = data.density_sign;
+    point.saturated = data.saturated;
     return point;
 }
 

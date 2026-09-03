@@ -219,10 +219,11 @@ HamiltLCAO<TK, TR>::HamiltLCAO(const UnitCell& ucell,
 #endif
 
         // end node should be OperatorDFTU
-        if (PARAM.inp.dft_plus_u)
+        const auto& input = PARAM.inp;
+        if (input.dft_plus_u)
         {
             Operator<TK>* plus_u = nullptr;
-            if (PARAM.inp.dft_plus_u == 2)
+            if (input.dft_plus_u == 2)
             {
                 plus_u = new OperatorDFTU<OperatorLCAO<TK, TR>>(this->hsk,
                                                               this->kv->kvec_d,
@@ -241,6 +242,7 @@ HamiltLCAO<TK, TR>::HamiltLCAO(const UnitCell& ucell,
                                                       &grid_d,
                                                       two_center_bundle.overlap_orb_onsite.get(),
                                                       orb.cutoffs(),
+                                                      input.device == "gpu",
                                                       p_dftu);
             }
             this->getOperator()->add(plus_u);
@@ -377,10 +379,11 @@ HamiltLCAO<TK, TR>::HamiltLCAO(const UnitCell& ucell,
                                                                            two_center_bundle.kinetic_orb.get());
             this->getOperator()->add(td_pot_hybrid);
         }
-        if (PARAM.inp.dft_plus_u)
+        const auto& input = PARAM.inp;
+        if (input.dft_plus_u)
         {
             Operator<TK>* plus_u = nullptr;
-            if (PARAM.inp.dft_plus_u == 2)
+            if (input.dft_plus_u == 2)
             {
                 plus_u = new OperatorDFTU<OperatorLCAO<TK, TR>>(this->hsk,
                                                               this->kv->kvec_d,
@@ -399,6 +402,7 @@ HamiltLCAO<TK, TR>::HamiltLCAO(const UnitCell& ucell,
                                                       &grid_d,
                                                       two_center_bundle.overlap_orb_onsite.get(),
                                                       orb.cutoffs(),
+                                                      input.device == "gpu",
                                                       p_dftu);
             }
             this->getOperator()->add(plus_u);

@@ -10,6 +10,7 @@
 //  3. pbec_spin
 
 #include "xc_functional.h"
+#include "xc_builtin_pbe_math.h"
 
 // Perdew gradient correction on correlation: PRB 33, 8822 (1986)
 void XC_Functional::perdew86(
@@ -365,49 +366,6 @@ void XC_Functional::pbec_spin(
     double &v1cdw,
     double &v2c)
 {
-    double ga = 0.0310910;
-    double be[3] = {0.0, 0.06672455060314922, 0.0460000};//mohan add
-    // zhengdy add 2019-09-12, ensure same parameter with another dft code.
-    double third = 1.0 / 3.0;
-    double pi34 = 0.62035049089940;
-    // pi34=(3/4pi)^(1/3), xkf=(9 pi/4)^(1/3), xks= sqrt(4/pi)
-    double xkf = 1.9191582926775130;
-    double xks = 1.1283791670955130;
-    double rs = pi34 / pow(rho, third);
-    double ec = 0.0;
-    double vcup = 0.0;
-    double vcdw = 0.0;
-
-    XC_Functional::pw_spin(rs, zeta, ec, vcup, vcdw); //mohan fix bug 2012-05-28
-
-    double kf = xkf / rs;
-    double ks = xks * sqrt(kf);
-    double fz = 0.50 * (pow((1.0 + zeta) , (2.0 / 3.0)) + pow((1.0 - zeta) , (2.0 / 3.0)));
-    double fz2 = fz * fz;
-    double fz3 = fz2 * fz;
-    //fz4 = fz3 * fz;
-    double dfz = (pow((1.0 + zeta) , (- 1.0 / 3.0)) - pow((1.0 - zeta) , (- 1.0 / 3.0))) / 3.0;
-    double t = sqrt(grho) / (2.0 * fz * ks * rho);
-    double expe = exp(- ec / (fz3 * ga));
-    double af = be[iflag] / ga * (1.0 / (expe - 1.0));
-    double bfup = expe * (vcup - ec) / fz3;
-    double bfdw = expe * (vcdw - ec) / fz3;
-    double y = af * t * t;
-    double xy = (1.0 + y) / (1.0 + y + y * y);
-    double qy = y * y * (2.0 + y) / pow( (1.0 + y + y * y),2 );
-//    qy *= qy; //bug
-    double s1 = 1.0 + be[iflag] / ga * t * t * xy;
-    double h0 = fz3 * ga * log(s1);
-    double dh0up = be[iflag] * t * t * fz3 / s1 * (- 7.0 / 3.0 * xy - qy * (af * bfup / be[iflag] - 7.0 / 3.0));
-    double dh0dw = be[iflag] * t * t * fz3 / s1 * (- 7.0 / 3.0 * xy - qy * (af * bfdw / be[iflag] - 7.0 / 3.0));
-    double dh0zup = (3.0 * h0 / fz - be[iflag] * t * t * fz2 
-		    / s1 * (2.0 * xy - qy * (3.0 * af * expe * ec / fz3 / be[iflag] + 2.0))) * dfz * (1.0 - zeta);
-    double dh0zdw = - (3.0 * h0 / fz - be[iflag] * t * t * fz2 
-		    / s1 * (2.0 * xy - qy * (3.0 * af * expe * ec / fz3 / be[iflag] + 2.0))) * dfz * (1.0 + zeta);
-    double ddh0 = be[iflag] * fz / (2.0 * ks * ks * rho) * (xy - qy) / s1;
-    sc = rho * h0;
-    v1cup = h0 + dh0up + dh0zup;
-    v1cdw = h0 + dh0dw + dh0zdw;
-    v2c = ddh0;
-    return;
-} 
+    ModuleXC::BuiltinPbeMath::pbec_spin(
+        rho, zeta, grho, iflag, sc, v1cup, v1cdw, v2c);
+}

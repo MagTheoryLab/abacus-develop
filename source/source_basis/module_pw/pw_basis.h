@@ -9,6 +9,7 @@
 #include <complex>
 #include "source_base/module_fft/fft_bundle.h"
 #include <cstring>
+#include <memory>
 #ifdef __MPI
 #include "mpi.h"
 #endif
@@ -290,6 +291,46 @@ public:
                     const bool add = false,
                     const FPTYPE factor = 1.0) const; // in:(nz, ns)  ; out(nplane,nx*ny)
 
+#ifdef __CUDA
+    void setup_gpu_fft_companion();
+    bool has_gpu_fft_companion() const { return gpu_fft_bundle_ != nullptr; }
+    void real2recip_gpu_host(const double* in,
+                             std::complex<double>* out,
+                             const bool add,
+                             const double factor) const;
+    void real2recip_gpu_host(const std::complex<double>* in,
+                             std::complex<double>* out,
+                             const bool add,
+                             const double factor) const;
+    void recip2real_gpu_host(const std::complex<double>* in,
+                             double* out,
+                             const bool add,
+                             const double factor) const;
+    void recip2real_gpu_host(const std::complex<double>* in,
+                             std::complex<double>* out,
+                             const bool add,
+                             const double factor) const;
+    // The pointers passed to these four methods must all reside on the GPU.
+    // They expose the persistent companion FFT without host staging so that
+    // higher-level device-resident graphs can keep their intermediates local.
+    void real2recip_gpu_companion(const double* in,
+                                  std::complex<double>* out,
+                                  const bool add,
+                                  const double factor) const;
+    void real2recip_gpu_companion(const std::complex<double>* in,
+                                  std::complex<double>* out,
+                                  const bool add,
+                                  const double factor) const;
+    void recip2real_gpu_companion(const std::complex<double>* in,
+                                  double* out,
+                                  const bool add,
+                                  const double factor) const;
+    void recip2real_gpu_companion(const std::complex<double>* in,
+                                  std::complex<double>* out,
+                                  const bool add,
+                                  const double factor) const;
+#endif
+
     /**
      * @brief Converts data from reciprocal space to real space on Cpu
      *
@@ -441,6 +482,13 @@ protected:
   std::string precision = "double"; ///< single, double, mixing
   bool double_data_ = true;         ///<  if has double data
   bool float_data_ = false;         ///< if has float data
+
+#ifdef __CUDA
+  std::unique_ptr<ModuleBase::FFT_Bundle> gpu_fft_bundle_;
+  std::complex<double>* gpu_fft_complex_real_ = nullptr;
+  std::complex<double>* gpu_fft_reciprocal_ = nullptr;
+  double* gpu_fft_real_ = nullptr;
+#endif
 };
 }
 #endif // PWBASIS_H

@@ -581,6 +581,9 @@ if(USE_CUDA)
     source_hsolver/kernels/cuda/hegvd_op.cu
     source_hsolver/kernels/cuda/bpcg_kernel_op.cu
     source_estate/kernels/cuda/elecstate_op.cu
+    source_estate/module_dm/cal_dm_psi_gpu.cu
+    source_lcao/module_dftu/dftu_lcao_gpu.cu
+    source_hamilt/module_xc/xc_functional_ncgga_sf_gpu.cu
     source_base/module_device/cuda/memory_op.cu
     source_pw/module_pwdft/kernels/cuda/force_op.cu
     source_pw/module_pwdft/kernels/cuda/stress_op.cu

@@ -8,6 +8,9 @@
 #include "source_estate/module_charge/charge.h"
 #include "xc_functional.h"
 #include "xc_ncgga_radial.h"
+#ifdef __CUDA
+#include "xc_functional_ncgga_sf_gpu.h"
+#endif
 
 #include <array>
 #include <cmath>
@@ -125,6 +128,23 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
     constexpr double epsr = 1e-6;
     const double fac = 0.5;
     const bool is_gga = (XC_Functional::get_func_type() == 2 || XC_Functional::get_func_type() == 4);
+
+#ifdef __CUDA
+    if (gga_grad == 2)
+    {
+        std::tuple<double, double, ModuleBase::matrix> gpu_result;
+        if (try_v_xc_ncgga_sf_builtin_gpu(nrxx,
+                                          omega,
+                                          tpiba,
+                                          chr,
+                                          XC_Functional::get_func_id(),
+                                          gpu_result))
+        {
+            ModuleBase::timer::end("XC_Functional", "v_xc_ncgga_sf_builtin");
+            return gpu_result;
+        }
+    }
+#endif
 
     // Step 1: construct the mode-specific local spin map.  gga_grad=3 keeps
     // its existing raw-|m| data flow unchanged.

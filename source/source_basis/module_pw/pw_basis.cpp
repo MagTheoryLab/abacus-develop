@@ -40,10 +40,30 @@ PW_Basis:: ~PW_Basis()
     delete[] ig2igg;
     delete[] gg_uniq;
 #if defined(__CUDA) || defined(__ROCM)
-    if (this->device == "gpu")
+    if (this->d_is2fftixy != nullptr)
     {
         delmem_int_op()(this->d_is2fftixy);
+    }
+    if (this->ig2ixyz_gpu != nullptr)
+    {
         delmem_int_op()(this->ig2ixyz_gpu);
+    }
+#endif
+#ifdef __CUDA
+    if (this->gpu_fft_complex_real_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            this->gpu_fft_complex_real_);
+    }
+    if (this->gpu_fft_reciprocal_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            this->gpu_fft_reciprocal_);
+    }
+    if (this->gpu_fft_real_ != nullptr)
+    {
+        base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(
+            this->gpu_fft_real_);
     }
 #endif
 }

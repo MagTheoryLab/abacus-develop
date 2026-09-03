@@ -36,6 +36,43 @@
 
 namespace hsolver
 {
+namespace
+{
+
+template <typename TK>
+void cal_dm_psi_dispatch(const bool use_gpu,
+                         const Parallel_Orbitals* paraV,
+                         const ModuleBase::matrix& wg,
+                         const psi::Psi<TK>& psi,
+                         elecstate::DensityMatrix<TK, double>& dm)
+{
+    (void)use_gpu;
+    elecstate::cal_dm_psi(paraV, wg, psi, dm);
+}
+
+#ifdef __CUDA
+template <>
+void cal_dm_psi_dispatch<std::complex<double>>(
+    const bool use_gpu,
+    const Parallel_Orbitals* paraV,
+    const ModuleBase::matrix& wg,
+    const psi::Psi<std::complex<double>>& psi,
+    elecstate::DensityMatrix<std::complex<double>, double>& dm)
+{
+    if (use_gpu
+        && paraV->nrow == paraV->get_global_row_size()
+        && paraV->ncol == paraV->get_global_col_size())
+    {
+        elecstate::cal_dm_psi_gpu_single_rank(paraV, wg, psi, dm);
+    }
+    else
+    {
+        elecstate::cal_dm_psi(paraV, wg, psi, dm);
+    }
+}
+#endif
+
+} // namespace
 
 template <typename TK>
 void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
@@ -95,7 +132,7 @@ void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
                                      pes->skip_weights);
 
         elecstate::calEBand(pes->ekb, pes->wg, pes->f_en);
-        elecstate::cal_dm_psi(dm.get_paraV_pointer(), pes->wg, psi, dm);
+        cal_dm_psi_dispatch(this->use_gpu, dm.get_paraV_pointer(), pes->wg, psi, dm);
         dm.cal_DMR();
 
         if (!skip_charge)

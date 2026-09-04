@@ -1,5 +1,13 @@
 if(ENABLE_LCAO)
-abacus_disable_feature_definitions(__FFT_TWO_CENTER)
+if(USE_CUDA)
+AddTest(
+  TARGET nonlocal_fs_gpu_test
+  LIBS CUDA::cudart
+  KEEP_FEATURE_DEFINITIONS __CUDA
+  SOURCES test_nonlocal_fs_gpu.cpp ../nonlocal_fs_gpu.cu
+)
+endif()
+abacus_disable_feature_definitions(__FFT_TWO_CENTER __CUDA)
 
 AddTest(
   TARGET MODULE_LCAO_operator_overlap_test

@@ -9,6 +9,9 @@
 #include "dftu_nao_op.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
+#ifdef __CUDA
+#include "source_lcao/module_operator_lcao/nonlocal_fs_gpu.h"
+#endif
 
 namespace hamilt
 {
@@ -17,6 +20,7 @@ template <typename TK, typename TR>
 void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
                         const bool cal_force,
                         const bool cal_stress,
+                        const bool use_gpu,
                         ModuleBase::matrix& force,
                         ModuleBase::matrix& stress)
 {
@@ -49,6 +53,14 @@ void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
     {
         force.zero_out();
     }
+#ifdef __CUDA
+    const int density_spins = dftu_op->get_nspin() == 2 ? 2 : 1;
+    std::vector<nonlocal_gpu::Batch> batches(use_gpu ? dftu_op->get_ucell()->nat : 0);
+    for (int is = 0; use_gpu && is < density_spins; ++is)
+    {
+        assert(dmR_tmp[is]->get_nnr() == 0 || dmR_tmp[is]->get_wrapper() != nullptr);
+    }
+#endif
     // calculate atom_index for adjs_all, induced by omp parallel
     int atom_index = 0;
     std::vector<int> atom_index_all(dftu_op->get_ucell()->nat, -1);
@@ -153,6 +165,51 @@ void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
             double eu_tmp = 0;
             dftu_op->cal_pot_onsite(occ, tlp1, u_value, &pot_onsite[0], eu_tmp);
 
+#ifdef __CUDA
+            std::vector<std::size_t> left_offsets;
+            std::vector<std::size_t> right_offsets;
+            if (use_gpu)
+            {
+                auto& batch = batches[iat0];
+                left_offsets.resize(adjs.adj_num + 1);
+                right_offsets.resize(adjs.adj_num + 1);
+                for (int ad = 0; ad <= adjs.adj_num; ++ad)
+                {
+                    const int iat = dftu_op->get_ucell()->itia2iat(adjs.ntype[ad], adjs.natom[ad]);
+                    const auto rows = pv->get_indexes_row(iat);
+                    const auto cols = pv->get_indexes_col(iat);
+                    left_offsets[ad] = batch.projections.size();
+                    for (std::size_t i = 0; i < rows.size(); i += npol)
+                    {
+                        const auto& values = nlm_tot[ad].at(rows[i]);
+                        batch.projections.insert(batch.projections.end(), values.begin(), values.end());
+                    }
+                    right_offsets[ad] = batch.projections.size();
+                    for (std::size_t i = 0; i < cols.size(); i += npol)
+                    {
+                        const auto& values = nlm_tot[ad].at(cols[i]);
+                        batch.projections.insert(batch.projections.end(), values.begin(), values.end());
+                    }
+                }
+                // Preserve the CPU real-Pauli contraction, including the y
+                // channel. These are not complex spinor matrix elements.
+                for (int is = 0; is < dftu_op->get_nspin(); ++is)
+                {
+                    for (int m1 = 0; m1 < tlp1; ++m1)
+                    {
+                        for (int m2 = 0; m2 < tlp1; ++m2)
+                        {
+                            nonlocal_gpu::Coupling coupling = {};
+                            coupling.p1 = m1;
+                            coupling.p2 = m2;
+                            coupling.spin = npol == 2 ? is : 0;
+                            coupling.real = pot_onsite[(is * tlp1 + m1) * tlp1 + m2];
+                            batch.couplings.push_back(coupling);
+                        }
+                    }
+                }
+            }
+#endif
             // second iteration to calculate force and stress
             // calculate Force for atom J
             //     DMR_{I,J,R'-R} * <phi_{I,R}|chi_m> U*(1/2*delta(m, m')-occ(m, m'))
@@ -190,6 +247,35 @@ void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
                     // if not found , skip this pair of atoms
                     if (tmp[0] != nullptr)
                     {
+#ifdef __CUDA
+                        if (use_gpu)
+                        {
+                            auto& batch = batches[iat0];
+                            for (int is = 0; is < density_spins; ++is)
+                            {
+                                nonlocal_gpu::Task task = {};
+                                task.left = left_offsets[ad1];
+                                task.right = right_offsets[ad2];
+                                task.dm = tmp[is]->get_pointer() - dmR_tmp[is]->get_wrapper();
+                                if (is == 1) task.dm += dmR_tmp[0]->get_nnr();
+                                task.coupling = is * tlp1 * tlp1;
+                                task.coupling_count = (npol == 2 ? 4 : 1) * tlp1 * tlp1;
+                                task.rows = tmp[is]->get_row_size() / npol;
+                                task.cols = tmp[is]->get_col_size() / npol;
+                                task.projectors = tlp1;
+                                task.npol = npol;
+                                task.center = iat0;
+                                task.atom = iat1;
+                                for (int a = 0; a < 3; ++a)
+                                {
+                                    task.dis1[a] = dis1[a];
+                                    task.dis2[a] = dis2[a];
+                                }
+                                if (task.rows && task.cols) batch.tasks.push_back(task);
+                            }
+                            continue;
+                        }
+#endif
                         // calculate force
                         if (cal_force)
                         {
@@ -226,6 +312,60 @@ void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
             }
         }
     }
+
+#ifdef __CUDA
+    if (use_gpu)
+    {
+        ModuleBase::timer::start("DFTU", "gpu_contract");
+        nonlocal_gpu::Batch packed;
+        std::size_t projections_size = 0;
+        std::size_t couplings_size = 0;
+        std::size_t tasks_size = 0;
+        for (const auto& batch : batches)
+        {
+            projections_size += batch.projections.size();
+            couplings_size += batch.couplings.size();
+            tasks_size += batch.tasks.size();
+        }
+        packed.projections.reserve(projections_size);
+        packed.couplings.reserve(couplings_size);
+        packed.tasks.reserve(tasks_size);
+        for (const auto& batch : batches)
+        {
+            for (auto task : batch.tasks)
+            {
+                task.left += packed.projections.size();
+                task.right += packed.projections.size();
+                task.coupling += packed.couplings.size();
+                packed.tasks.push_back(task);
+            }
+            packed.projections.insert(packed.projections.end(), batch.projections.begin(), batch.projections.end());
+            packed.couplings.insert(packed.couplings.end(), batch.couplings.begin(), batch.couplings.end());
+        }
+        // Collinear DMRs are separate allocations; concatenate only in that
+        // case. Noncollinear Pauli DMR is already a contiguous rank-local array.
+        std::vector<double> collinear_dm;
+        const double* density = dmR_tmp[0]->get_wrapper();
+        std::size_t density_size = dmR_tmp[0]->get_nnr();
+        if (density_spins == 2)
+        {
+            density_size += dmR_tmp[1]->get_nnr();
+            collinear_dm.reserve(density_size);
+            for (int is = 0; is < density_spins; ++is)
+            {
+                if (dmR_tmp[is]->get_nnr() != 0)
+                {
+                    collinear_dm.insert(collinear_dm.end(), dmR_tmp[is]->get_wrapper(),
+                                        dmR_tmp[is]->get_wrapper() + dmR_tmp[is]->get_nnr());
+                }
+            }
+            density = collinear_dm.data();
+        }
+        nonlocal_gpu::compute(packed, density, density_size, dftu_op->get_ucell()->nat,
+                              cal_force, cal_stress, force.c, stress_tmp.data());
+        ModuleBase::timer::end("DFTU", "gpu_contract");
+    }
+#endif
 
     if (cal_force)
     {
@@ -267,17 +407,17 @@ void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
 // explicit template instantiation
 template void cal_fs_nao_r<double, double>(
     DFTU<OperatorLCAO<double, double>>* dftu_op,
-    const bool cal_force, const bool cal_stress,
+    const bool cal_force, const bool cal_stress, const bool use_gpu,
     ModuleBase::matrix& force, ModuleBase::matrix& stress);
 
 template void cal_fs_nao_r<std::complex<double>, double>(
     DFTU<OperatorLCAO<std::complex<double>, double>>* dftu_op,
-    const bool cal_force, const bool cal_stress,
+    const bool cal_force, const bool cal_stress, const bool use_gpu,
     ModuleBase::matrix& force, ModuleBase::matrix& stress);
 
 template void cal_fs_nao_r<std::complex<double>, std::complex<double>>(
     DFTU<OperatorLCAO<std::complex<double>, std::complex<double>>>* dftu_op,
-    const bool cal_force, const bool cal_stress,
+    const bool cal_force, const bool cal_stress, const bool use_gpu,
     ModuleBase::matrix& force, ModuleBase::matrix& stress);
 
 } // namespace hamilt

@@ -61,6 +61,7 @@ class DFTU;
  * @param dftu_op     [in] pointer to the DFTU operator object (for accessing ucell, dftu, intor_)
  * @param cal_force   [in] whether to compute force
  * @param cal_stress  [in] whether to compute stress
+ * @param use_gpu     [in] use the GPU projector contraction in CUDA builds
  * @param force       [out] force matrix (nat, 3), accumulated
  * @param stress      [out] stress matrix (3, 3), accumulated
  *
@@ -71,6 +72,7 @@ template <typename TK, typename TR>
 void cal_fs_nao_r(DFTU<OperatorLCAO<TK, TR>>* dftu_op,
                         const bool cal_force,
                         const bool cal_stress,
+                        const bool use_gpu,
                         ModuleBase::matrix& force,
                         ModuleBase::matrix& stress);
 

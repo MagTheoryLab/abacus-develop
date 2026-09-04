@@ -618,6 +618,7 @@ if(USE_CUDA)
   if(ENABLE_LCAO)
     list(APPEND device_physics_srcs
       source_estate/module_dm/cal_dm_psi_gpu.cu
+      source_lcao/module_operator_lcao/nonlocal_fs_gpu.cu
       source_lcao/module_dftu/dftu_lcao_gpu.cu)
     if(ENABLE_MPI)
       list(APPEND device_physics_srcs

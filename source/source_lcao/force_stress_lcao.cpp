@@ -183,11 +183,13 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
                                                            PARAM.inp.nspin, PARAM.inp.nbands, ucell, *this->RA);
 
     // Step 2: Handle different spin cases
-    if (PARAM.inp.nspin == 1 || PARAM.inp.nspin == 2)
+    const int nspin = PARAM.inp.nspin;
+    const bool use_gpu = PARAM.inp.device == "gpu";
+    if (nspin == 1 || nspin == 2)
     {
         // For nspin=1 or nspin=2, use double precision
         // Switch to spin channel 1 for DMR access
-        if (PARAM.inp.nspin == 2)
+        if (nspin == 2)
         {
             dmat.dm->switch_dmr(1);
             edm.switch_dmr(1);
@@ -218,7 +220,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
         hamilt::Nonlocal<hamilt::OperatorLCAO<T, double>> tmp_nonlocal(
             nullptr, kv.kvec_d, nullptr, &ucell, orb.cutoffs(), &gd,
             two_center_bundle.overlap_orb_beta.get());
-        tmp_nonlocal.cal_force_stress(isforce, isstress, dmR, fvnl_dbeta, svnl_dbeta);
+        tmp_nonlocal.cal_force_stress(isforce, isstress, dmR, fvnl_dbeta, svnl_dbeta, use_gpu);
         
         if(td_stype == 2)
         {
@@ -230,7 +232,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
         }
 
         // Switch back to spin channel 0
-        if (PARAM.inp.nspin == 2)
+        if (nspin == 2)
         {
             dmat.dm->switch_dmr(0);
             edm.switch_dmr(0);
@@ -242,7 +244,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
         PulayForceStress::cal_pulay_fs(fvl_dphi, svl_dphi, *dmat.dm, ucell, pelec->pot,
                                        isforce, isstress, false /*reset dm to gint*/);
     }
-    else if (PARAM.inp.nspin == 4)
+    else if (nspin == 4)
     {
 
         // Calculate kinetic force/stress (uses DM)
@@ -277,7 +279,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
         hamilt::Nonlocal<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>> tmp_nonlocal(
             nullptr, kv.kvec_d, nullptr, &ucell, orb.cutoffs(), &gd,
             two_center_bundle.overlap_orb_beta.get());
-        tmp_nonlocal.cal_force_stress(isforce, isstress, &tmp_dmr, fvnl_dbeta, svnl_dbeta);
+        tmp_nonlocal.cal_force_stress(isforce, isstress, &tmp_dmr, fvnl_dbeta, svnl_dbeta, use_gpu);
 
         // Calculate local potential force/stress (vl_dphi)
         flk.ParaV = dmat.dm->get_paraV_pointer();
@@ -474,7 +476,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
                                                                    &gd,
                                                                    two_center_bundle.overlap_orb_onsite.get(),
                                                                    orb.cutoffs(),
-                                                                   false,
+                                                                   use_gpu,
                                                                    &dftu);
 
             tmpu.cal_force_stress(isforce, isstress, force_u, stress_u);

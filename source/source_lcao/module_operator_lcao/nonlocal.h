@@ -59,7 +59,8 @@ class Nonlocal<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                           const bool cal_stress,
                           const HContainer<TR>* dmR,
                           ModuleBase::matrix& force,
-                          ModuleBase::matrix& stress);
+                          ModuleBase::matrix& stress,
+                          const bool use_gpu);
 
     /**
  * @brief Calculate the derivative of the non-local pseudopotential Hamiltonian

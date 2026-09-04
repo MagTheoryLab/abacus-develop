@@ -1,4 +1,7 @@
 #include "nonlocal.h"
+#ifdef __CUDA
+#include "nonlocal_fs_gpu.h"
+#endif
 #include "operator_fs_utils.h"
 #include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
@@ -11,7 +14,8 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
                                                   const bool cal_stress,
                                                   const HContainer<TR>* dmR,
                                                   ModuleBase::matrix& force,
-                                                  ModuleBase::matrix& stress)
+                                                  ModuleBase::matrix& stress,
+                                                  const bool use_gpu)
 {
     ModuleBase::TITLE("Nonlocal", "cal_force_stress");
 
@@ -25,6 +29,11 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
     {
         force.zero_out();
     }
+#ifdef __CUDA
+    // DensityMatrix owns a single contiguous rank-local DMR allocation.
+    assert(!use_gpu || dmR->get_nnr() == 0 || dmR->get_wrapper() != nullptr);
+    std::vector<nonlocal_gpu::Batch> batches(use_gpu ? ucell->nat : 0);
+#endif
     // 1. calculate <psi|beta> for each pair of atoms
     // loop over all on-site atoms
     #pragma omp parallel
@@ -105,6 +114,55 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
             }
         }      
 
+#ifdef __CUDA
+        // Pack each center independently; the existing OpenMP atom loop owns
+        // this batch. Transfer the rank-local DMR only once after all centers.
+        std::vector<std::size_t> left_offsets;
+        std::vector<std::size_t> right_offsets;
+        int projector_count = 0;
+        if (use_gpu)
+        {
+            auto& batch = batches[iat0];
+            left_offsets.resize(adjs.adj_num + 1);
+            right_offsets.resize(adjs.adj_num + 1);
+            for (int ad = 0; ad <= adjs.adj_num; ++ad)
+            {
+                const int atom = ucell->itia2iat(adjs.ntype[ad], adjs.natom[ad]);
+                const auto rows = paraV->get_indexes_row(atom);
+                const auto cols = paraV->get_indexes_col(atom);
+                left_offsets[ad] = batch.projections.size();
+                for (std::size_t i = 0; i < rows.size(); i += npol)
+                {
+                    const auto& values = nlm_iat0[ad].at(rows[i]);
+                    projector_count = values.size() / 4;
+                    batch.projections.insert(batch.projections.end(), values.begin(), values.end());
+                }
+                right_offsets[ad] = batch.projections.size();
+                for (std::size_t i = 0; i < cols.size(); i += npol)
+                {
+                    const auto& values = nlm_iat0[ad].at(cols[i]);
+                    projector_count = values.size() / 4;
+                    batch.projections.insert(batch.projections.end(), values.begin(), values.end());
+                }
+            }
+            const auto& pp = ucell->atoms[T0].ncpp;
+            for (int spin = 0; spin < npol * npol; ++spin)
+            {
+                for (int no = 0; no < pp.non_zero_count_soc[spin]; ++no)
+                {
+                    nonlocal_gpu::Coupling coupling;
+                    coupling.p1 = pp.index1_soc[spin][no];
+                    coupling.p2 = pp.index2_soc[spin][no];
+                    coupling.spin = spin;
+                    const TR* value = nullptr;
+                    ucell->atoms[T0].ncpp.get_d(spin, coupling.p1, coupling.p2, value);
+                    coupling.real = std::real(*value);
+                    coupling.imag = std::imag(*value);
+                    batch.couplings.push_back(coupling);
+                }
+            }
+        }
+#endif
         // second iteration to calculate force and stress
         for (int ad1 = 0; ad1 < adjs.adj_num + 1; ++ad1)
         {
@@ -135,6 +193,33 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
                 // if not found , skip this pair of atoms
                 if (tmp != nullptr)
                 {
+#ifdef __CUDA
+                    if (use_gpu)
+                    {
+                        auto& batch = batches[iat0];
+                        nonlocal_gpu::Task task = {};
+                        task.left = left_offsets[ad1];
+                        task.right = right_offsets[ad2];
+                        task.dm = tmp->get_pointer() - dmR->get_wrapper();
+                        task.coupling_count = batch.couplings.size();
+                        task.rows = tmp->get_row_size() / npol;
+                        task.cols = tmp->get_col_size() / npol;
+                        task.projectors = projector_count;
+                        task.npol = npol;
+                        task.center = iat0;
+                        task.atom = iat1;
+                        for (int a = 0; a < 3; ++a)
+                        {
+                            task.dis1[a] = dis1[a];
+                            task.dis2[a] = dis2[a];
+                        }
+                        if (task.rows && task.cols && task.coupling_count)
+                        {
+                            batch.tasks.push_back(task);
+                        }
+                        continue;
+                    }
+#endif
                     // calculate force
                     if (cal_force) {
                         this->cal_force_IJR(iat1,
@@ -182,6 +267,40 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
     }
     }
 
+#ifdef __CUDA
+    if (use_gpu)
+    {
+        ModuleBase::timer::start("Nonlocal", "gpu_contract");
+        nonlocal_gpu::Batch packed;
+        std::size_t projections_size = 0;
+        std::size_t couplings_size = 0;
+        std::size_t tasks_size = 0;
+        for (const auto& batch : batches)
+        {
+            projections_size += batch.projections.size();
+            couplings_size += batch.couplings.size();
+            tasks_size += batch.tasks.size();
+        }
+        packed.projections.reserve(projections_size);
+        packed.couplings.reserve(couplings_size);
+        packed.tasks.reserve(tasks_size);
+        for (auto& batch : batches)
+        {
+            for (auto task : batch.tasks)
+            {
+                task.left += packed.projections.size();
+                task.right += packed.projections.size();
+                task.coupling += packed.couplings.size();
+                packed.tasks.push_back(task);
+            }
+            packed.projections.insert(packed.projections.end(), batch.projections.begin(), batch.projections.end());
+            packed.couplings.insert(packed.couplings.end(), batch.couplings.begin(), batch.couplings.end());
+        }
+        nonlocal_gpu::compute(packed, dmR->get_wrapper(), dmR->get_nnr(),
+                              ucell->nat, cal_force, cal_stress, force.c, stress_tmp.data());
+        ModuleBase::timer::end("Nonlocal", "gpu_contract");
+    }
+#endif
     if (cal_force)
     {
 #ifdef __MPI
@@ -457,15 +576,15 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_stress_IJR(const int& iat1,
 template void Nonlocal<OperatorLCAO<double, double>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<double>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
 template void Nonlocal<OperatorLCAO<std::complex<double>, double>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<double>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
 template void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<std::complex<double>>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
 
 // explicit member function instantiations for cal_force_IJR (generic template)
 template void Nonlocal<OperatorLCAO<double, double>>::cal_force_IJR(

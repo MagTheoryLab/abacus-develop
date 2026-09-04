@@ -3,6 +3,7 @@
 #include <base/macros/macros.h>
 #include <cuda_runtime.h>
 #include <thrust/complex.h>
+#include <algorithm>
 
 namespace hamilt
 {
@@ -128,12 +129,12 @@ void* create_cache(const double* projections,
     cache->dm_size = dm_size;
     cache->hr_size = hr_size;
     cache->onsite_size = onsite_size;
-    CHECK_CUDA(cudaMalloc(&cache->projections, projection_count * sizeof(double)));
-    CHECK_CUDA(cudaMalloc(&cache->tasks, task_count * sizeof(ProjectionTask)));
-    CHECK_CUDA(cudaMalloc(&cache->dm, dm_size * sizeof(double)));
+    CHECK_CUDA(cudaMalloc(&cache->projections, std::max<std::size_t>(1, projection_count) * sizeof(double)));
+    CHECK_CUDA(cudaMalloc(&cache->tasks, std::max<std::size_t>(1, task_count) * sizeof(ProjectionTask)));
+    CHECK_CUDA(cudaMalloc(&cache->dm, std::max<std::size_t>(1, dm_size) * sizeof(double)));
     CHECK_CUDA(cudaMalloc(&cache->occupations, onsite_size * sizeof(double)));
     CHECK_CUDA(cudaMalloc(&cache->onsite, onsite_size * sizeof(thrust::complex<double>)));
-    CHECK_CUDA(cudaMalloc(&cache->hr, hr_size * sizeof(thrust::complex<double>)));
+    CHECK_CUDA(cudaMalloc(&cache->hr, std::max<std::size_t>(1, hr_size) * sizeof(thrust::complex<double>)));
     CHECK_CUDA(cudaMemcpy(cache->projections,
                           projections,
                           projection_count * sizeof(double),

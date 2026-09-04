@@ -197,10 +197,7 @@ template <>
 bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>::contribute_hr_gpu(
     const Parallel_Orbitals* pv)
 {
-    if (!this->use_gpu_
-        || this->nspin != 4
-        || pv->nrow != pv->get_global_row_size()
-        || pv->ncol != pv->get_global_col_size())
+    if (!this->use_gpu_ || this->nspin != 4)
     {
         return false;
     }
@@ -231,6 +228,33 @@ bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double
 
     if (this->gpu_cache_ == nullptr)
     {
+        // Kernels consume local spinor pairs, not global dense matrices.
+        // All ranks must choose the same path before occupation collectives.
+        int unsupported_layout = 0;
+        for (int atom = 0; atom < this->ucell->nat; ++atom)
+        {
+            for (const auto& indexes : {pv->get_indexes_row(atom), pv->get_indexes_col(atom)})
+            {
+                if (indexes.size() % 2 != 0)
+                {
+                    unsupported_layout = 1;
+                    continue;
+                }
+                for (std::size_t i = 0; i < indexes.size(); i += 2)
+                {
+                    if (indexes[i] % 2 != 0 || indexes[i + 1] != indexes[i] + 1)
+                    {
+                        unsupported_layout = 1;
+                    }
+                }
+            }
+        }
+        Parallel_Reduce::reduce_all(unsupported_layout);
+        if (unsupported_layout != 0)
+        {
+            return false;
+        }
+
         struct AdjacentProjection
         {
             std::size_t row_offset;
@@ -312,10 +336,7 @@ bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double
                 }
             }
         }
-        if (tasks.empty())
-        {
-            return false;
-        }
+        // Empty local work still participates in the occupation reduction.
         const std::size_t dm_size = dmr->get_nnr();
         this->gpu_cache_ = hamilt::dftu_gpu::create_cache(projections.data(),
                                                           projections.size(),
@@ -332,6 +353,9 @@ bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double
         hamilt::dftu_gpu::compute_occupations(this->gpu_cache_,
                                                dmr->get_wrapper(),
                                                occupations.data());
+        // Match the CPU path's global occupation sum, packed across centers.
+        // Neither the distributed DMR nor H(R) is gathered here.
+        Parallel_Reduce::reduce_all(occupations.data(), static_cast<int>(occupations.size()));
     }
 
     std::vector<std::complex<double>> onsite(onsite_offsets.back(), 0.0);

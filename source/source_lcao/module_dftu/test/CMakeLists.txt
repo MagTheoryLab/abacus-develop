@@ -1,5 +1,14 @@
 abacus_disable_feature_definitions(__CUDA)
 
+if(USE_CUDA)
+AddTest(
+  TARGET dftu_lcao_gpu_test
+  LIBS CUDA::cudart
+  KEEP_FEATURE_DEFINITIONS __CUDA
+  SOURCES test_dftu_lcao_gpu.cpp ../dftu_lcao_gpu.cu
+)
+endif()
+
 AddTest(
   TARGET dftu_pw_test
   LIBS base device parameter

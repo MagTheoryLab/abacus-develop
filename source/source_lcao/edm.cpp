@@ -83,6 +83,15 @@ elecstate::DensityMatrix<std::complex<double>, double> Force_LCAO<std::complex<d
         }
     }
 
+    edm.init_DMR(ra, &ucell);
+#if defined(__CUDA) && defined(__MPI)
+    const auto* lcao_state = dynamic_cast<const elecstate::ElecStateLCAO<std::complex<double>>*>(pelec);
+    if (lcao_state != nullptr && lcao_state->cal_dmr_from_k_owner(wg_ekb, edm))
+    {
+        return edm;
+    }
+#endif
+
     // use the original formula (Hamiltonian matrix) to calculate energy density matrix
     if (dm.EDMK.size())
     {
@@ -101,7 +110,6 @@ elecstate::DensityMatrix<std::complex<double>, double> Force_LCAO<std::complex<d
     }
 
     // cal_dm_2d
-    edm.init_DMR(ra, &ucell);
     edm.cal_DMR();
     return edm;
 }

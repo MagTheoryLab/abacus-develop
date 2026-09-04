@@ -52,6 +52,7 @@ __device__ int find_dmr_block(const int* blocks, const int block_count, const in
     return left;
 }
 
+template <bool full_complex>
 __global__ void dense_dmk_to_sparse_dmr_kernel(const int output_size,
                                                 const int nlocal,
                                                 const thrust::complex<double>* dmk,
@@ -75,6 +76,14 @@ __global__ void dense_dmk_to_sparse_dmr_kernel(const int output_size,
     const thrust::complex<double> phase = phases[iblock];
     const int* rows = orbital_indices + block[3];
     const int* cols = orbital_indices + block[4];
+
+    if (full_complex)
+    {
+        const thrust::complex<double> value = phase * dmk[rows[irow] + cols[icol] * nlocal];
+        dmr[2 * index] += value.real();
+        dmr[2 * index + 1] += value.imag();
+        return;
+    }
 
     const int row0 = rows[irow - irow % 2];
     const int col0 = cols[icol - icol % 2];
@@ -102,18 +111,23 @@ __global__ void dense_dmk_to_sparse_dmr_kernel(const int output_size,
     }
 }
 
-} // namespace
-
-void cal_dmr_psi_gpu_k_owner(
+template <typename TR>
+void cal_dmr_psi_gpu_k_owner_impl(
     const Parallel_Orbitals* para_v,
     const ModuleBase::matrix& wg,
     const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
-    elecstate::DensityMatrix<std::complex<double>, double>& dm)
+    const std::vector<ModuleBase::Vector3<double>>& kvec_d,
+    hamilt::HContainer<TR>* local_dmr)
 {
     ModuleBase::TITLE("elecstate", "cal_dmr_psi_gpu_k_owner");
     ModuleBase::timer::start("elecstate", "cal_dmr_psi_gpu_k_owner");
 
-    hamilt::HContainer<double>* local_dmr = dm.get_DMR_pointer(1);
+    constexpr int scalars_per_element = sizeof(TR) / sizeof(double);
+    static_assert(scalars_per_element == 1 || scalars_per_element == 2, "unsupported DMR scalar layout");
+    if (owner_wfc.size() != static_cast<std::size_t>(wg.nr) || owner_wfc.size() != kvec_d.size())
+    {
+        throw std::runtime_error("k-owner wavefunctions, weights and k vectors have inconsistent sizes");
+    }
     const std::size_t local_nnr_size = local_dmr->get_nnr();
     if (local_nnr_size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
     {
@@ -139,10 +153,10 @@ void cal_dmr_psi_gpu_k_owner(
     // Pack each local IJR block once. Orbital indexes are global, while the
     // first field is the offset in this rank's contiguous HContainer wrapper.
     std::vector<int> local_metadata;
-    const double* local_wrapper = local_dmr->get_wrapper();
+    const TR* local_wrapper = local_dmr->get_wrapper();
     for (int iap = 0; iap < static_cast<int>(local_dmr->size_atom_pairs()); ++iap)
     {
-        const hamilt::AtomPair<double>& atom_pair = local_dmr->get_atom_pair(iap);
+        const hamilt::AtomPair<TR>& atom_pair = local_dmr->get_atom_pair(iap);
         const int iat1 = atom_pair.get_atom_i();
         const int iat2 = atom_pair.get_atom_j();
         const int row_size = atom_pair.get_row_size();
@@ -178,7 +192,7 @@ void cal_dmr_psi_gpu_k_owner(
         for (int iR = 0; iR < atom_pair.get_R_size(); ++iR)
         {
             const ModuleBase::Vector3<int> R = atom_pair.get_R_index(iR);
-            const double* block_pointer = atom_pair.get_HR_values(iR).get_pointer();
+            const TR* block_pointer = atom_pair.get_HR_values(iR).get_pointer();
             const std::ptrdiff_t offset = block_pointer - local_wrapper;
             if (offset < 0 || offset > std::numeric_limits<int>::max())
             {
@@ -292,6 +306,11 @@ void cal_dmr_psi_gpu_k_owner(
     }
     const int wfc_size = nlocal * nbands;
     const int dmk_size = nlocal * nlocal;
+    if (global_nnr > std::numeric_limits<int>::max() / scalars_per_element)
+    {
+        throw std::runtime_error("complex sparse DMR exceeds 32-bit MPI counts");
+    }
+    const int scalar_count = global_nnr * scalars_per_element;
     std::complex<double>* weighted_wfc_device = nullptr;
     std::complex<double>* dmk_device = nullptr;
     std::complex<double>* phases_device = nullptr;
@@ -305,12 +324,12 @@ void cal_dmr_psi_gpu_k_owner(
     base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(blocks_device, blocks.size());
     base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(orbital_indices_device, orbital_indices.size());
     base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(weights_device, nbands);
-    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(dmr_device, global_nnr);
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(dmr_device, scalar_count);
     base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
         blocks_device, blocks.data(), blocks.size());
     base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
         orbital_indices_device, orbital_indices.data(), orbital_indices.size());
-    CHECK_CUDA(cudaMemset(dmr_device, 0, static_cast<std::size_t>(global_nnr) * sizeof(double)));
+    CHECK_CUDA(cudaMemset(dmr_device, 0, static_cast<std::size_t>(scalar_count) * sizeof(double)));
 
     std::vector<double> weights(nbands, 0.0);
     std::vector<std::complex<double>> phases(block_R.size());
@@ -320,7 +339,6 @@ void cal_dmr_psi_gpu_k_owner(
     const char transpose = 'T';
     const int threads = 256;
     const int grid = (global_nnr + threads - 1) / threads;
-    const std::vector<ModuleBase::Vector3<double>>& kvec_d = dm.get_kvec_d();
 
     for (int ik = 0; ik < static_cast<int>(owner_wfc.size()); ++ik)
     {
@@ -358,7 +376,7 @@ void cal_dmr_psi_gpu_k_owner(
         ModuleBase::gemm_op<std::complex<double>, base_device::DEVICE_GPU>()(
             normal, transpose, nlocal, nlocal, nbands, &one,
             weighted_wfc_device, nlocal, wfc_device, nlocal, &zero, dmk_device, nlocal);
-        dense_dmk_to_sparse_dmr_kernel<<<grid, threads>>>(
+        dense_dmk_to_sparse_dmr_kernel<scalars_per_element == 2><<<grid, threads>>>(
             global_nnr,
             nlocal,
             reinterpret_cast<const thrust::complex<double>*>(dmk_device),
@@ -370,12 +388,16 @@ void cal_dmr_psi_gpu_k_owner(
         CHECK_CUDA(cudaGetLastError());
     }
 
-    std::vector<double> sparse_contribution(global_nnr, 0.0);
+    std::vector<double> sparse_contribution(scalar_count, 0.0);
     base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
-        sparse_contribution.data(), dmr_device, global_nnr);
+        sparse_contribution.data(), dmr_device, scalar_count);
     local_dmr->set_zero();
+    for (auto& count : recvcounts)
+    {
+        count *= scalars_per_element;
+    }
     Parallel_Common::reduce_scatter_double(sparse_contribution.data(),
-                                           local_dmr->get_wrapper(),
+                                           reinterpret_cast<double*>(local_dmr->get_wrapper()),
                                            recvcounts.data(),
                                            MPI_COMM_WORLD);
 
@@ -388,6 +410,27 @@ void cal_dmr_psi_gpu_k_owner(
     base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(dmr_device);
 
     ModuleBase::timer::end("elecstate", "cal_dmr_psi_gpu_k_owner");
+}
+
+} // namespace
+
+void cal_dmr_psi_gpu_k_owner(
+    const Parallel_Orbitals* para_v,
+    const ModuleBase::matrix& wg,
+    const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
+    elecstate::DensityMatrix<std::complex<double>, double>& dm)
+{
+    cal_dmr_psi_gpu_k_owner_impl(para_v, wg, owner_wfc, dm.get_kvec_d(), dm.get_DMR_pointer(1));
+}
+
+void cal_dmr_psi_gpu_k_owner(
+    const Parallel_Orbitals* para_v,
+    const ModuleBase::matrix& weights,
+    const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
+    const std::vector<ModuleBase::Vector3<double>>& kvec_d,
+    hamilt::HContainer<std::complex<double>>& full_dmr)
+{
+    cal_dmr_psi_gpu_k_owner_impl(para_v, weights, owner_wfc, kvec_d, &full_dmr);
 }
 
 } // namespace elecstate

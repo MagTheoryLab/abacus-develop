@@ -266,7 +266,13 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
         std::vector<int> ijrs = dmat.dm->get_DMR_pointer(1)->get_ijr_info();
         tmp_dmr.insert_ijrs(&ijrs);
         tmp_dmr.allocate();
-        dmat.dm->cal_DMR_full(&tmp_dmr);
+#if defined(__CUDA) && defined(__MPI)
+        const auto* lcao_state = dynamic_cast<const elecstate::ElecStateLCAO<T>*>(pelec);
+        if (lcao_state == nullptr || !lcao_state->cal_dmr_from_k_owner(pelec->wg, *dmat.dm, tmp_dmr))
+#endif
+        {
+            dmat.dm->cal_DMR_full(&tmp_dmr);
+        }
         // Calculate nonlocal force/stress (uses DM)
         hamilt::Nonlocal<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>> tmp_nonlocal(
             nullptr, kv.kvec_d, nullptr, &ucell, orb.cutoffs(), &gd,

@@ -48,6 +48,15 @@ void cal_dmr_psi_gpu_k_owner(
     const ModuleBase::matrix& wg,
     const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
     elecstate::DensityMatrix<std::complex<double>, double>& dm);
+
+// Full complex spinor DMR for nonlocal force/stress. Unlike the real Pauli
+// representation above, this preserves the imaginary matrix components.
+void cal_dmr_psi_gpu_k_owner(
+    const Parallel_Orbitals* para_v,
+    const ModuleBase::matrix& weights,
+    const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
+    const std::vector<ModuleBase::Vector3<double>>& kvec_d,
+    hamilt::HContainer<std::complex<double>>& full_dmr);
 #endif
 #endif
 

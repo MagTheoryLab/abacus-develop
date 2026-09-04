@@ -11,11 +11,6 @@
 
 #include <vector>
 
-#if defined(__CUDA) && defined(__MPI)
-#include "source_base/module_external/scalapack_connector.h"
-#include "source_base/parallel_2d.h"
-#endif
-
 namespace elecstate
 {
 
@@ -33,42 +28,53 @@ void ElecStateLCAO<TK>::clear_k_owner_wfc()
 }
 
 template <typename TK>
-void ElecStateLCAO<TK>::materialize_k_owner_state(psi::Psi<TK>& wfc, DensityMatrix<TK, double>& dm)
+bool ElecStateLCAO<TK>::cal_dmr_from_k_owner(const ModuleBase::matrix&, DensityMatrix<TK, double>&) const
+{
+    return false;
+}
+
+template <typename TK>
+bool ElecStateLCAO<TK>::cal_dmr_from_k_owner(
+    const ModuleBase::matrix&, const DensityMatrix<TK, double>&,
+    hamilt::HContainer<std::complex<double>>&) const
+{
+    return false;
+}
+
+template <typename TK>
+std::vector<const psi::Psi<TK, base_device::DEVICE_GPU>*> ElecStateLCAO<TK>::k_owner_wfc_view() const
+{
+    std::vector<const psi::Psi<TK, base_device::DEVICE_GPU>*> view(owner_wfc_.size(), nullptr);
+    for (std::size_t ik = 0; ik < owner_wfc_.size(); ++ik)
+    {
+        view[ik] = owner_wfc_[ik].get();
+    }
+    return view;
+}
+
+template <>
+bool ElecStateLCAO<std::complex<double>>::cal_dmr_from_k_owner(
+    const ModuleBase::matrix& weights, DensityMatrix<std::complex<double>, double>& dm) const
 {
     if (owner_wfc_.empty())
     {
-        return;
+        return false;
     }
-    ModuleBase::timer::start("ElecStateLCAO", "materialize_owner");
-    const auto* pv = dm.get_paraV_pointer();
-    const int nrow = pv->get_global_row_size();
-    const int nbands = pv->get_nbands();
-    int desc_wfc[9];
-    std::copy(pv->desc_wfc, pv->desc_wfc + 9, desc_wfc);
-    Parallel_2D owner_layout;
-    owner_layout.init(nrow, nbands, pv->get_block_size(), MPI_COMM_SELF);
-    for (int ik = 0; ik < static_cast<int>(owner_wfc_.size()); ++ik)
+    cal_dmr_psi_gpu_k_owner(dm.get_paraV_pointer(), weights, k_owner_wfc_view(), dm);
+    return true;
+}
+
+template <>
+bool ElecStateLCAO<std::complex<double>>::cal_dmr_from_k_owner(
+    const ModuleBase::matrix& weights, const DensityMatrix<std::complex<double>, double>& dm,
+    hamilt::HContainer<std::complex<double>>& full_dmr) const
+{
+    if (owner_wfc_.empty())
     {
-        int desc_owner[9];
-        std::copy(owner_layout.desc, owner_layout.desc + 9, desc_owner);
-        std::unique_ptr<psi::Psi<TK>> host_wfc;
-        if (owner_wfc_[ik])
-        {
-            host_wfc.reset(new psi::Psi<TK>(*owner_wfc_[ik]));
-        }
-        else
-        {
-            desc_owner[1] = -1;
-        }
-        wfc.fix_k(ik);
-        Cpxgemr2d(nrow, nbands, host_wfc ? host_wfc->get_pointer() : nullptr,
-                  1, 1, desc_owner, wfc.get_pointer(), 1, 1, desc_wfc, pv->blacs_ctxt);
+        return false;
     }
-    // Preserve the ordinary DMR already used by SCF. Only materialize its
-    // legacy dense representation for consumers that still require it.
-    cal_dm_psi(pv, this->wg, wfc, dm);
-    owner_wfc_.clear();
-    ModuleBase::timer::end("ElecStateLCAO", "materialize_owner");
+    cal_dmr_psi_gpu_k_owner(dm.get_paraV_pointer(), weights, k_owner_wfc_view(), dm.get_kvec_d(), full_dmr);
+    return true;
 }
 #endif
 

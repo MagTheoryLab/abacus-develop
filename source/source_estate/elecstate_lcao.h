@@ -38,7 +38,13 @@ class ElecStateLCAO : public ElecState
     using OwnerWavefunctions = std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>;
     void retain_k_owner_wfc(OwnerWavefunctions&& wfc);
     void clear_k_owner_wfc();
-    void materialize_k_owner_state(psi::Psi<TK>& wfc, DensityMatrix<TK, double>& dm);
+    // Fill the requested sparse representation from the latest eigenvectors.
+    // Return false when the latest solve used the legacy distributed Psi/DMK.
+    // weights may be occupations or occupations times band energies.
+    bool cal_dmr_from_k_owner(const ModuleBase::matrix& weights, DensityMatrix<TK, double>& dm) const;
+    bool cal_dmr_from_k_owner(const ModuleBase::matrix& weights,
+                              const DensityMatrix<TK, double>& dm,
+                              hamilt::HContainer<std::complex<double>>& full_dmr) const;
 #endif
 
     // use for pexsi
@@ -69,6 +75,7 @@ class ElecStateLCAO : public ElecState
   private:
 #if defined(__CUDA) && defined(__MPI)
     OwnerWavefunctions owner_wfc_;
+    std::vector<const psi::Psi<TK, base_device::DEVICE_GPU>*> k_owner_wfc_view() const;
 #endif
 };
 

@@ -40,16 +40,6 @@ namespace
 {
 
 template <typename TK>
-void cal_dmr_psi_k_owner_dispatch(
-    const Parallel_Orbitals*,
-    const ModuleBase::matrix&,
-    const std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>&,
-    elecstate::DensityMatrix<TK, double>&)
-{
-    ModuleBase::WARNING_QUIT("HSolverLCAO::solve", "k-owner DMR is only available for complex CUDA calculations");
-}
-
-template <typename TK>
 void cal_dm_psi_dispatch(const bool use_gpu,
                          const Parallel_Orbitals* paraV,
                          const ModuleBase::matrix& wg,
@@ -61,21 +51,6 @@ void cal_dm_psi_dispatch(const bool use_gpu,
 }
 
 #ifdef __CUDA
-template <>
-void cal_dmr_psi_k_owner_dispatch<std::complex<double>>(
-    const Parallel_Orbitals* paraV,
-    const ModuleBase::matrix& wg,
-    const std::vector<std::unique_ptr<psi::Psi<std::complex<double>, base_device::DEVICE_GPU>>>& owner_wfc,
-    elecstate::DensityMatrix<std::complex<double>, double>& dm)
-{
-    std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*> owner_wfc_view(owner_wfc.size(), nullptr);
-    for (int ik = 0; ik < static_cast<int>(owner_wfc.size()); ++ik)
-    {
-        owner_wfc_view[ik] = owner_wfc[ik].get();
-    }
-    elecstate::cal_dmr_psi_gpu_k_owner(paraV, wg, owner_wfc_view, dm);
-}
-
 template <>
 void cal_dm_psi_dispatch<std::complex<double>>(
     const bool use_gpu,
@@ -168,9 +143,12 @@ void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
         elecstate::calEBand(pes->ekb, pes->wg, pes->f_en);
         if (used_k_owner_dmr)
         {
-            cal_dmr_psi_k_owner_dispatch(dm.get_paraV_pointer(), pes->wg, owner_wfc, dm);
 #if defined(__CUDA) && defined(__MPI)
             lcao_state->retain_k_owner_wfc(std::move(owner_wfc));
+            if (!lcao_state->cal_dmr_from_k_owner(pes->wg, dm))
+            {
+                ModuleBase::WARNING_QUIT("HSolverLCAO::solve", "k-owner DMR requires complex GPU eigenvectors");
+            }
 #endif
         }
         else

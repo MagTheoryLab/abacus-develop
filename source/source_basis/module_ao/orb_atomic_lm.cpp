@@ -232,19 +232,6 @@ void Numerical_Orbital_Lm::extra_uniform(const double &dr_uniform_in, const bool
 	
 	this->psi_uniform.resize(nr_uniform,0);
 
-	// do interpolation here to make grid more dense
-
-#ifdef _OPENMP
-	#pragma omp parallel for schedule(static)
-#endif
-	for (int ir = 0; ir < this->nr_uniform; ir++)
-	{
-		const double psi_uniform_tmp  = 
-		ModuleBase::Mathzone_Add1::Uni_RadialF(ModuleBase::GlobalFunc::VECTOR_TO_PTR(this->psi), this->nr, this->rab[0], ir * dr_uniform); 
-		this->psi_uniform[ir] = psi_uniform_tmp;
-//    	this->psi_uniform[ir] = ModuleBase::Mathzone::Polynomial_Interpolation(this->psi, this->nr, this->rab[0], ir * dr_uniform); 
-    }
-	
 	//----------------------------------------------	 
 	// calculate the dpsi_uniform
 	//----------------------------------------------	 
@@ -303,7 +290,21 @@ void Numerical_Orbital_Lm::extra_uniform(const double &dr_uniform_in, const bool
 	//	ModuleBase::Mathzone_Add1::SplineD2 (rad, psi_uniform, nr_uniform, 0.0, 0.0, ddpsi_uniform);
 	double* tmp = new double[nr_uniform];
 	ModuleBase::Mathzone_Add1::Cubic_Spline_Interpolation(ModuleBase::GlobalFunc::VECTOR_TO_PTR(r_radial), ModuleBase::GlobalFunc::VECTOR_TO_PTR(psi), y2, 
-			nr, rad, nr_uniform, tmp, ModuleBase::GlobalFunc::VECTOR_TO_PTR(dpsi_uniform));
+			nr, rad, nr_uniform, ModuleBase::GlobalFunc::VECTOR_TO_PTR(psi_uniform),
+            ModuleBase::GlobalFunc::VECTOR_TO_PTR(dpsi_uniform));
+
+    // Gint's Hermite interpolation needs values and slopes of the same
+    // function. Uni_RadialF values paired with cubic-spline slopes introduce
+    // artificial sub-grid oscillations and break energy/force consistency.
+    // Retain the zero padding outside the orbital support; the spline helper
+    // otherwise extrapolates its final interval into these guard points.
+    for (int ir = 0; ir < nr_uniform; ++ir)
+    {
+        if (rad[ir] >= rcut)
+        {
+            psi_uniform[ir] = 0.0;
+        }
+    }
 
 	// calculate zty
 	// liaochen add 2010-08

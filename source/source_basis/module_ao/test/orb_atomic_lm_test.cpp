@@ -696,6 +696,38 @@ TEST_F(NumericalOrbitalLmTest, FiniteDiffPsiUniform) {
 }
 
 
+TEST(NumericalOrbitalLmUniformGrid, DerivativeMatchesInterpolatedValues)
+{
+    const int nr = 101;
+    const double dr = 0.02;
+    const double fine_dr = 0.001;
+    std::vector<double> radial(nr);
+    std::vector<double> rab(nr, dr);
+    std::vector<double> values(nr);
+    for (int ir = 0; ir < nr; ++ir)
+    {
+        const double r = ir * dr;
+        radial[ir] = r;
+        values[ir] = r * r * (2.0 - r) * (2.0 - r) * std::exp(-r);
+    }
+    Numerical_Orbital_Lm orbital;
+    orbital.set_orbital_info("X", 0, 0, 0, nr, rab.data(), radial.data(),
+                            Numerical_Orbital_Lm::Psi_Type::Psi, values.data(),
+                            65, 0.1, fine_dr, false, true, false);
+    const double* f = orbital.getPsiuniform();
+    const double* df = orbital.getDpsiuniform();
+    double max_error = 0.0;
+    // All five samples lie inside one original spline interval. A fourth-order
+    // centered difference differentiates its cubic polynomial exactly.
+    for (int ir = 10; ir < 1990; ir += 20)
+    {
+        const double fd = (f[ir - 2] - 8.0 * f[ir - 1]
+                           + 8.0 * f[ir + 1] - f[ir + 2]) / (12.0 * fine_dr);
+        max_error = std::max(max_error, std::abs(fd - df[ir]));
+    }
+    EXPECT_LT(max_error, 5e-10);
+}
+
 TEST_F(NumericalOrbitalLmTest, PsiSave) {
 
     // This test checks whether plot() works as expected.
@@ -883,5 +915,4 @@ int main(int argc, char **argv)
 
     return result;
 }
-
 

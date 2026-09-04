@@ -33,6 +33,22 @@ void cal_dm_psi_gpu_single_rank(const Parallel_Orbitals* ParaV,
                                 const ModuleBase::matrix& wg,
                                 const psi::Psi<std::complex<double>>& wfc,
                                 elecstate::DensityMatrix<std::complex<double>, double>& DM);
+
+#if defined(__MPI)
+/**
+ * @brief Build distributed real-space DMR directly from k-owner wavefunctions.
+ *
+ * Every rank contributes the k points for which owner_wfc[ik] is non-null.
+ * Eigenvectors and the transient dense DMK remain on the owner's GPU. Only the
+ * rank-concatenated sparse DMR contribution is copied to the host and
+ * reduce-scattered to the existing local HContainer layout.
+ */
+void cal_dmr_psi_gpu_k_owner(
+    const Parallel_Orbitals* para_v,
+    const ModuleBase::matrix& wg,
+    const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
+    elecstate::DensityMatrix<std::complex<double>, double>& dm);
+#endif
 #endif
 
 #ifdef __MPI

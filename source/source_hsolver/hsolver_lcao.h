@@ -8,6 +8,9 @@
 #include "source_estate/module_charge/charge.h" // mohan add 20251024
 #include "source_estate/module_dm/density_matrix.h" // mohan add 20251103
 
+#include <memory>
+#include <vector>
+
 namespace hsolver
 {
 
@@ -21,9 +24,10 @@ class HSolverLCAO
                 const int nlocal_in,
                 const int nbands_in,
                 const double nelec_in,
-                const bool use_gpu_in)
+                const bool use_gpu_in,
+                const bool use_k_owner_dmr_in)
         : ParaV(ParaV_in), method(method_in), kpar_lcao(kpar_lcao_in), nlocal(nlocal_in), nbands(nbands_in),
-          nelec(nelec_in), use_gpu(use_gpu_in) {};
+          nelec(nelec_in), use_gpu(use_gpu_in), use_k_owner_dmr(use_k_owner_dmr_in) {}
 
     void solve(hamilt::Hamilt<TK>* pHamilt,
                psi::Psi<TK>& psi,
@@ -45,7 +49,8 @@ class HSolverLCAO
     // The solving algorithm using cusolver is different from others, so a separate function is needed
     void parakSolve_cusolver(hamilt::Hamilt<TK>* pHamilt,
                              psi::Psi<TK>& psi,
-                             elecstate::ElecState* pes);
+                             elecstate::ElecState* pes,
+                             std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>* owner_wfc);
 
     const Parallel_Orbitals* ParaV = nullptr;
 
@@ -56,6 +61,7 @@ class HSolverLCAO
     const int nbands;    // number of bands to be solved for
     const double nelec;  // total number of electrons, only used by the pexsi branch
     const bool use_gpu;  // true if running on GPU, only used by the native-ELPA branch
+    const bool use_k_owner_dmr; // keep cuSolver eigenvectors on their k owner and form DMR there
 };
 
 } // namespace hsolver

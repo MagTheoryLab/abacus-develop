@@ -78,4 +78,34 @@ void Parallel_Common::bcast_char(char* object, const int n)
     MPI_Bcast(object, n, MPI_CHAR, 0, MPI_COMM_WORLD);
 }
 
+int Parallel_Common::communicator_size(MPI_Comm comm)
+{
+    int size = 1;
+    MPI_Comm_size(comm, &size);
+    return size;
+}
+
+void Parallel_Common::allgather_int(const int* sendbuf, int sendcount, int* recvbuf, MPI_Comm comm)
+{
+    MPI_Allgather(sendbuf, sendcount, MPI_INT, recvbuf, sendcount, MPI_INT, comm);
+}
+
+void Parallel_Common::allgatherv_int(const int* sendbuf,
+                                     int sendcount,
+                                     int* recvbuf,
+                                     const int* recvcounts,
+                                     const int* displs,
+                                     MPI_Comm comm)
+{
+    MPI_Allgatherv(sendbuf, sendcount, MPI_INT, recvbuf, recvcounts, displs, MPI_INT, comm);
+}
+
+void Parallel_Common::reduce_scatter_double(const double* sendbuf,
+                                            double* recvbuf,
+                                            const int* recvcounts,
+                                            MPI_Comm comm)
+{
+    MPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, MPI_DOUBLE, MPI_SUM, comm);
+}
+
 #endif

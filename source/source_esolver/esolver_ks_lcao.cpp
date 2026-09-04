@@ -451,13 +451,30 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     // 3) run Hsolver
     if (!skip_solve)
     {
+        const bool use_k_owner_dmr = this->inp_->calculation == "scf"
+                                     && this->inp_->nspin == 4
+                                     && !this->inp_->cal_force
+                                     && !this->inp_->cal_stress
+                                     && this->inp_->dft_plus_u != 2
+                                     && !this->inp_->deepks_scf
+                                     && this->inp_->deepks_out_labels == 0
+                                     && !this->inp_->out_wfc_lcao
+                                     && !this->inp_->out_dos
+                                     && this->inp_->out_dmk[0] == 0
+                                     && !this->inp_->out_dm_npz
+                                     && !this->inp_->out_mul
+                                     && !this->inp_->rpa
+                                     && !this->inp_->rdmft
+                                     && !this->inp_->qo_switch
+                                     && !this->exx_info_.info_global.cal_exx;
         hsolver::HSolverLCAO<TK> hsolver_lcao_obj(&(this->pv),
                                                   this->inp_->ks_solver,
                                                   PARAM.globalv.kpar_lcao,
                                                   PARAM.globalv.nlocal,
                                                   this->inp_->nbands,
                                                   this->inp_->nelec,
-                                                  this->inp_->device == "gpu");
+                                                  this->inp_->device == "gpu",
+                                                  use_k_owner_dmr);
         hsolver_lcao_obj.solve(static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt), this->psi[0], this->pelec, *this->dmat.dm, 
           this->chr, this->inp_->nspin, skip_charge);
     }

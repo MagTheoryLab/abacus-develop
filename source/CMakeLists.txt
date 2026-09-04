@@ -582,9 +582,6 @@ if(USE_CUDA)
     source_hsolver/kernels/cuda/hegvd_op.cu
     source_hsolver/kernels/cuda/bpcg_kernel_op.cu
     source_estate/kernels/cuda/elecstate_op.cu
-    source_estate/module_dm/cal_dm_psi_gpu.cu
-    source_lcao/module_dftu/dftu_lcao_gpu.cu
-    source_hamilt/module_xc/xc_functional_ncgga_sf_gpu.cu
     source_base/module_device/cuda/memory_op.cu
     source_pw/module_pwdft/kernels/cuda/force_op.cu
     source_pw/module_pwdft/kernels/cuda/stress_op.cu
@@ -600,6 +597,20 @@ if(USE_CUDA)
     source_pw/module_pwdft/kernels/cuda/mul_potential_op.cu
     source_pw/module_pwdft/kernels/cuda/vec_mul_vec_complex.cu
     source_pw/module_pwdft/kernels/cuda/exx_cal_energy_op.cu)
+  # High-level physics adapters depend on PW_Basis/DM and must not be
+  # injected into every low-level unit test through the device OBJECT library.
+  set(device_physics_srcs
+    source_hamilt/module_xc/xc_functional_ncgga_sf_gpu.cu)
+  if(ENABLE_LCAO)
+    list(APPEND device_physics_srcs
+      source_estate/module_dm/cal_dm_psi_gpu.cu
+      source_lcao/module_dftu/dftu_lcao_gpu.cu)
+    if(ENABLE_MPI)
+      list(APPEND device_physics_srcs
+        source_estate/module_dm/cal_dmr_psi_gpu_k_owner.cu)
+    endif()
+  endif()
+  add_library(device_physics OBJECT ${device_physics_srcs})
 endif()
 
 if(USE_ROCM)
@@ -634,6 +645,7 @@ add_library(device OBJECT ${device_srcs})
 
 if(USE_CUDA)
   target_link_libraries(device PRIVATE cusolver cublas cufft)
+  target_link_libraries(${ABACUS_BIN_NAME} PRIVATE device_physics)
 elseif(USE_ROCM)
   target_link_libraries(device PRIVATE
     device_rocm

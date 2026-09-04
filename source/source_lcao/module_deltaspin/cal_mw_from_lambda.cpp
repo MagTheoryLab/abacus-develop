@@ -104,7 +104,8 @@ void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
                                                             PARAM.globalv.nlocal,
                                                             PARAM.inp.nbands,
                                                             PARAM.inp.nelec,
-                                                            PARAM.inp.device == "gpu");
+                                                            PARAM.inp.device == "gpu",
+                                                            this->nspin_ == 4);
         if (this->nspin_ == 2)
         {
             dynamic_cast<hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, double>>*>(this->p_operator)
@@ -129,10 +130,9 @@ void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         elecstate::calEBand(this->pelec->ekb,this->pelec->wg,this->pelec->f_en);
 
         // Note: although update_lambda() modifies lambda in-place above,
-        // solve() unconditionally recomputes DM and DMR (via cal_dm_psi +
-        // cal_DMR) from the psi obtained by diagonalizing with the new
-        // lambda. Therefore the DMR used inside cal_mi_lcao() is consistent
-        // with the updated lambda and is NOT stale.
+        // solve() unconditionally rebuilds DMR from the eigenvectors obtained
+        // with the new lambda. Therefore cal_mi_lcao() never observes a stale
+        // density matrix.
         this->cal_mi_lcao(i_step);
     }
     else

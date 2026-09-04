@@ -19,7 +19,7 @@ void Stress_Func<FPTYPE, Device>::stress_loc(const UnitCell& ucell,
 	ModuleBase::TITLE("Stress","stress_loc");
 	ModuleBase::timer::start("Stress","stress_loc");
 
-	std::vector<FPTYPE> dvloc(rho_basis->npw);
+	std::vector<FPTYPE> dvloc(rho_basis->ngg);
 	FPTYPE evloc=0.0;
 	FPTYPE fact=1.0;
 
@@ -237,14 +237,12 @@ const UnitCell& ucell_in
     double *r_d = nullptr;
 	double *rhoc_d = nullptr;
 	double *rab_d = nullptr;
-    double *aux_d = nullptr;
 	double *drhocg_d = nullptr;
     if (this->device == base_device::GpuDevice) {
         resmem_var_op()(r_d, msh);
         resmem_var_op()(rhoc_d, msh);
         resmem_var_op()(rab_d, msh);
 
-        resmem_var_op()(aux_d, msh);
         resmem_var_op()(gx_arr_d, rho_basis->ngg+1);
         resmem_var_op()(drhocg_d, rho_basis->ngg);
 
@@ -262,6 +260,12 @@ const UnitCell& ucell_in
 		hamilt::cal_stress_drhoc_aux_op<FPTYPE, Device>()(
 			r_d,rhoc_d,gx_arr_d+igl0,rab_d,drhocg_d+igl0,msh,igl0,rho_basis->ngg-igl0,ucell_in.omega,3);
 		syncmem_var_d2h_op()(dvloc+igl0, drhocg_d+igl0, rho_basis->ngg-igl0);	
+
+        delmem_var_op()(r_d);
+        delmem_var_op()(rhoc_d);
+        delmem_var_op()(rab_d);
+        delmem_var_op()(gx_arr_d);
+        delmem_var_op()(drhocg_d);
 
 	} else {
 		hamilt::cal_stress_drhoc_aux_op<FPTYPE, Device>()(

@@ -122,7 +122,8 @@ class Force_Stress_LCAO
                          const Charge* const chr,
                          ModulePW::PW_Basis* rhopw,
                          const pseudopot_cell_vl& locpp,
-                         const Structure_Factor& sf);
+                         const Structure_Factor& sf,
+                         const bool use_gpu);
 
     static double force_invalid_threshold_ev;
 };

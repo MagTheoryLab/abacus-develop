@@ -155,6 +155,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
     ModuleBase::matrix svl_dphi;
     ModuleBase::matrix svnl_dalpha; // deepks
 
+    const bool use_gpu = PARAM.inp.device == "gpu";
     //! stress
     if (isstress)
     {
@@ -173,7 +174,7 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
 
         // calculate basic terms in Stress, similar method with PW base
         this->calStressPwPart(ucell, sigmadvl, sigmahar, sigmaewa, sigmacc,
-          sigmaxc, pelec->f_en.etxc, pelec->charge, rhopw, locpp, sf);
+          sigmaxc, pelec->f_en.etxc, pelec->charge, rhopw, locpp, sf, use_gpu);
     }
 
     // Calculate forces and stresses using new operator-based methods
@@ -184,7 +185,6 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
 
     // Step 2: Handle different spin cases
     const int nspin = PARAM.inp.nspin;
-    const bool use_gpu = PARAM.inp.device == "gpu";
     if (nspin == 1 || nspin == 2)
     {
         // For nspin=1 or nspin=2, use double precision
@@ -1034,12 +1034,23 @@ void Force_Stress_LCAO<T>::calStressPwPart(UnitCell& ucell,
                                            const Charge* const chr,
                                            ModulePW::PW_Basis* rhopw,
                                            const pseudopot_cell_vl& locpp,
-                                           const Structure_Factor& sf)
+                                           const Structure_Factor& sf,
+                                           const bool use_gpu)
 {
     ModuleBase::TITLE("Force_Stress_LCAO", "calStressPwPart");
 
     // local pseudopotential stress:
-    sc_pw.stress_loc(ucell, sigmadvl, rhopw, locpp.vloc, &sf, 0, chr);
+#ifdef __CUDA
+    if (use_gpu)
+    {
+        Stress_Func<double, base_device::DEVICE_GPU> gpu_stress;
+        gpu_stress.stress_loc(ucell, sigmadvl, rhopw, locpp.vloc, &sf, false, chr);
+    }
+    else
+#endif
+    {
+        sc_pw.stress_loc(ucell, sigmadvl, rhopw, locpp.vloc, &sf, false, chr);
+    }
 
     // hartree term
     sc_pw.stress_har(ucell, sigmahar, rhopw, 0, chr);

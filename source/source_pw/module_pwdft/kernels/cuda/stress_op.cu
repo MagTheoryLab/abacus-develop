@@ -680,7 +680,7 @@ __global__ void cal_stress_drhoc_aux3(
         return rab * rhoc * (r * cos(gx * r)/gx - sin(gx * r)/(gx * gx));
     };
 
-    FPTYPE f_0 = r[0] * r[0] * rhoc[0] * rab[0];
+    FPTYPE f_0 = aux(r[0], rhoc[0], gx, rab[0]);
     for( int ir = 1 ; ir< mesh - 2; ir+=2)
     {
         rhocg1 += 2 * aux(r[ir],rhoc[ir], gx, rab[ir]) + aux(r[ir+1],rhoc[ir+1], gx, rab[ir+1]);

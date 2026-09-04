@@ -18,6 +18,47 @@
 #define PRINT_HS false
 #define REPEATRUN 1
 
+#ifdef __CUDA
+TEST(DiagoCusolverDeviceTest, ComplexEigenvectorsRemainOnDevice)
+{
+    const int nlocal = 2;
+    const int nbands = 1;
+    int desc[9]{};
+    std::vector<std::complex<double>> h = {
+        {2.0, 0.0}, {123.0, 0.0}, {0.5, 0.2}, {3.0, 0.0}};
+    std::vector<std::complex<double>> s = {
+        {1.0, 0.0}, {456.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
+    hamilt::MatrixBlock<std::complex<double>> h_mat{h.data(), nlocal, nlocal, desc};
+    hamilt::MatrixBlock<std::complex<double>> s_mat{s.data(), nlocal, nlocal, desc};
+    psi::Psi<std::complex<double>> psi_host;
+    psi::Psi<std::complex<double>, base_device::DEVICE_GPU> psi_device;
+    psi_host.resize(1, nbands, nlocal);
+    psi_device.resize(1, nbands, nlocal);
+    double eigen_host[nbands]{};
+    double eigen_device[nbands]{};
+
+    hsolver::DiagoCusolver<std::complex<double>> host_solver(nlocal, nbands);
+    host_solver.diag(h_mat, s_mat, psi_host, eigen_host);
+    hsolver::DiagoCusolver<std::complex<double>> device_solver(nlocal, nbands);
+    device_solver.diag_device(h_mat, s_mat, psi_device, eigen_device);
+    psi::Psi<std::complex<double>> psi_device_on_host(psi_device);
+
+    EXPECT_NEAR(eigen_host[0], eigen_device[0], PASSTHRESHOLD);
+    for (int i = 0; i < nlocal; ++i)
+    {
+        for (int j = 0; j < nlocal; ++j)
+        {
+            const std::complex<double> host_density
+                = std::conj(psi_host(0, 0, i)) * psi_host(0, 0, j);
+            const std::complex<double> device_density
+                = std::conj(psi_device_on_host(0, 0, i)) * psi_device_on_host(0, 0, j);
+            EXPECT_NEAR(host_density.real(), device_density.real(), PASSTHRESHOLD);
+            EXPECT_NEAR(host_density.imag(), device_density.imag(), PASSTHRESHOLD);
+        }
+    }
+}
+#endif
+
 /************************************************
  *  unit test of LCAO diagonalization
  ***********************************************/
@@ -140,13 +181,15 @@ class DiagoPrepare
 
     void poison_lower_triangle()
     {
+        // distribute_data converts row-major fixtures to column-major solver
+        // buffers. Poison only the latter and leave the LAPACK oracle intact.
         for (int col = 0; col < nlocal; ++col)
         {
             for (int row = col + 1; row < nlocal; ++row)
             {
                 const int index = row + col * nlocal;
-                this->h[index] = T(123.0 + row + col);
-                this->s[index] = T(0.0);
+                this->h_local[index] = T(123.0 + row + col);
+                this->s_local[index] = T(0.0);
             }
         }
     }
@@ -221,6 +264,10 @@ class DiagoPrepare
     {
         this->pb2d();
         this->distribute_data();
+        if (ks_solver == "cusolver")
+        {
+            this->poison_lower_triangle();
+        }
         this->print_hs();
         this->set_env();
 
@@ -306,10 +353,6 @@ TEST_P(DiagoGammaOnlyTest, LCAO)
     std::stringstream out_info;
     DiagoPrepare<double> dp = GetParam();
     ASSERT_TRUE(dp.produce_HS());
-    if (dp.ks_solver == "cusolver")
-    {
-        dp.poison_lower_triangle();
-    }
     dp.diago();
 
     if (dp.myrank == 0)
@@ -342,10 +385,6 @@ TEST_P(DiagoKPointsTest, LCAO)
     std::stringstream out_info;
     DiagoPrepare<std::complex<double>> dp = GetParam();
     ASSERT_TRUE(dp.produce_HS());
-    if (dp.ks_solver == "cusolver")
-    {
-        dp.poison_lower_triangle();
-    }
     dp.diago();
 
     if (dp.myrank == 0)

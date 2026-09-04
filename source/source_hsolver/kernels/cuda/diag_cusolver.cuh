@@ -51,6 +51,8 @@ class Diag_Cusolver_gvd{
 //          N: the dimension of the matrix
     void init_double(int N);
     void init_complex(int N);
+    void solve_double(int N, int M, double* A, double* B, double* W);
+    void solve_complex(int N, int M, std::complex<double>* A, std::complex<double>* B, double* W);
 
     void finalize();  // for recycling the usage of the static class Diag_Cusolver_gvd
 public:
@@ -74,6 +76,14 @@ public:
 
     void Dngvd_double(int N, int M, double *A, double *B, double *W, double *V);
     void Dngvd_complex(int N, int M, std::complex<double> *A, std::complex<double> *B, double *W, std::complex<double> *V);
+    void Dngvd_double_device(int N, int M, double* A, double* B, double* W, double* V, int nvec);
+    void Dngvd_complex_device(int N,
+                              int M,
+                              std::complex<double>* A,
+                              std::complex<double>* B,
+                              double* W,
+                              std::complex<double>* V,
+                              int nvec);
 
     void Dngvd(int N, int M, double *A, double *B, double *W, double *V)
     {
@@ -83,6 +93,22 @@ public:
     void Dngvd(int N, int M, std::complex<double> *A, std::complex<double> *B, double *W, std::complex<double> *V)
     {
         return Dngvd_complex(N, M, A, B, W, V);
+    };
+
+    void Dngvd_device(int N, int M, double* A, double* B, double* W, double* V, int nvec)
+    {
+        return Dngvd_double_device(N, M, A, B, W, V, nvec);
+    };
+
+    void Dngvd_device(int N,
+                      int M,
+                      std::complex<double>* A,
+                      std::complex<double>* B,
+                      double* W,
+                      std::complex<double>* V,
+                      int nvec)
+    {
+        return Dngvd_complex_device(N, M, A, B, W, V, nvec);
     };
 
 };

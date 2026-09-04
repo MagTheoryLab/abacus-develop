@@ -50,6 +50,28 @@ void DiagoCusolver<T>::diag(
     ModuleBase::timer::end("DiagoCusolver", "cusolver");
 }
 
+template <typename T>
+void DiagoCusolver<T>::diag_device(
+    hamilt::MatrixBlock<T>& h_mat,
+    hamilt::MatrixBlock<T>& s_mat,
+    psi::Psi<T, base_device::DEVICE_GPU>& psi,
+    Real* eigenvalue_in)
+{
+    ModuleBase::TITLE("DiagoCusolver", "diag_device");
+    ModuleBase::timer::start("DiagoCusolver", "cusolver");
+    std::vector<double> eigen(this->nlocal, 0.0);
+    this->dc.Dngvd_device(h_mat.row,
+                          h_mat.col,
+                          h_mat.p,
+                          s_mat.p,
+                          eigen.data(),
+                          psi.get_pointer(),
+                          psi.get_nbands());
+    const int inc = 1;
+    BlasConnector::copy(this->nbands, eigen.data(), inc, eigenvalue_in, inc);
+    ModuleBase::timer::end("DiagoCusolver", "cusolver");
+}
+
 // Explicit instantiation of the DiagoCusolver class for real and complex numbers
 template class DiagoCusolver<double>;
 template class DiagoCusolver<complex>;

@@ -31,6 +31,11 @@ class DiagoCusolver
       psi::Psi<T>& psi,
       Real* eigenvalue_in);
 
+    void diag_device(hamilt::MatrixBlock<T>& h_mat,
+                     hamilt::MatrixBlock<T>& s_mat,
+                     psi::Psi<T, base_device::DEVICE_GPU>& psi,
+                     Real* eigenvalue_in);
+
     // Static variable to keep track of the decomposition state
     static int DecomposedState;
 

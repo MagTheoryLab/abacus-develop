@@ -11,8 +11,66 @@
 
 #include <vector>
 
+#if defined(__CUDA) && defined(__MPI)
+#include "source_base/module_external/scalapack_connector.h"
+#include "source_base/parallel_2d.h"
+#endif
+
 namespace elecstate
 {
+
+#if defined(__CUDA) && defined(__MPI)
+template <typename TK>
+void ElecStateLCAO<TK>::retain_k_owner_wfc(OwnerWavefunctions&& wfc)
+{
+    owner_wfc_ = std::move(wfc);
+}
+
+template <typename TK>
+void ElecStateLCAO<TK>::clear_k_owner_wfc()
+{
+    owner_wfc_.clear();
+}
+
+template <typename TK>
+void ElecStateLCAO<TK>::materialize_k_owner_state(psi::Psi<TK>& wfc, DensityMatrix<TK, double>& dm)
+{
+    if (owner_wfc_.empty())
+    {
+        return;
+    }
+    ModuleBase::timer::start("ElecStateLCAO", "materialize_owner");
+    const auto* pv = dm.get_paraV_pointer();
+    const int nrow = pv->get_global_row_size();
+    const int nbands = pv->get_nbands();
+    int desc_wfc[9];
+    std::copy(pv->desc_wfc, pv->desc_wfc + 9, desc_wfc);
+    Parallel_2D owner_layout;
+    owner_layout.init(nrow, nbands, pv->get_block_size(), MPI_COMM_SELF);
+    for (int ik = 0; ik < static_cast<int>(owner_wfc_.size()); ++ik)
+    {
+        int desc_owner[9];
+        std::copy(owner_layout.desc, owner_layout.desc + 9, desc_owner);
+        std::unique_ptr<psi::Psi<TK>> host_wfc;
+        if (owner_wfc_[ik])
+        {
+            host_wfc.reset(new psi::Psi<TK>(*owner_wfc_[ik]));
+        }
+        else
+        {
+            desc_owner[1] = -1;
+        }
+        wfc.fix_k(ik);
+        Cpxgemr2d(nrow, nbands, host_wfc ? host_wfc->get_pointer() : nullptr,
+                  1, 1, desc_owner, wfc.get_pointer(), 1, 1, desc_wfc, pv->blacs_ctxt);
+    }
+    // Preserve the ordinary DMR already used by SCF. Only materialize its
+    // legacy dense representation for consumers that still require it.
+    cal_dm_psi(pv, this->wg, wfc, dm);
+    owner_wfc_.clear();
+    ModuleBase::timer::end("ElecStateLCAO", "materialize_owner");
+}
+#endif
 
 
 template <>

@@ -453,8 +453,6 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     {
         const bool use_k_owner_dmr = this->inp_->calculation == "scf"
                                      && this->inp_->nspin == 4
-                                     && !this->inp_->cal_force
-                                     && !this->inp_->cal_stress
                                      && this->inp_->dft_plus_u != 2
                                      && !this->inp_->deepks_scf
                                      && this->inp_->deepks_out_labels == 0
@@ -575,6 +573,16 @@ void ESolver_KS_LCAO<TK, TR>::after_scf(UnitCell& ucell, const int istep, const 
 {
     ModuleBase::TITLE("ESolver_KS_LCAO", "after_scf");
     ModuleBase::timer::start("ESolver_KS_LCAO", "after_scf");
+
+#if defined(__CUDA) && defined(__MPI)
+    if (this->inp_->cal_force || this->inp_->cal_stress)
+    {
+        // The final eigenvectors must be those that produced the converged
+        // density (also for DeltaSpin), not a new solve with an updated H.
+        dynamic_cast<elecstate::ElecStateLCAO<TK>*>(this->pelec)
+            ->materialize_k_owner_state(*this->psi, *this->dmat.dm);
+    }
+#endif
 
     auto* hamilt_lcao = dynamic_cast<hamilt::HamiltLCAO<TK, TR>*>(this->p_hamilt);
 

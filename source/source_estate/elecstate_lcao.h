@@ -5,6 +5,7 @@
 #include "source_estate/module_dm/density_matrix.h"
 
 #include <vector>
+#include <memory>
 
 namespace elecstate
 {
@@ -31,6 +32,15 @@ class ElecStateLCAO : public ElecState
 
     double get_spin_constrain_energy() override;
 
+#if defined(__CUDA) && defined(__MPI)
+    // The latest solve owns these eigenvectors until the next solve or final
+    // force/stress preparation. Non-owner ranks keep null entries, not copies.
+    using OwnerWavefunctions = std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>;
+    void retain_k_owner_wfc(OwnerWavefunctions&& wfc);
+    void clear_k_owner_wfc();
+    void materialize_k_owner_state(psi::Psi<TK>& wfc, DensityMatrix<TK, double>& dm);
+#endif
+
     // use for pexsi
 
     /**
@@ -56,6 +66,10 @@ class ElecStateLCAO : public ElecState
                  Charge* chr,
                  bool skip_charge = false);
 
+  private:
+#if defined(__CUDA) && defined(__MPI)
+    OwnerWavefunctions owner_wfc_;
+#endif
 };
 
 template <typename TK>

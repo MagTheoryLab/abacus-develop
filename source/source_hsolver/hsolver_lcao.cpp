@@ -111,6 +111,11 @@ void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
     ModuleBase::TITLE("HSolverLCAO", "solve");
     ModuleBase::timer::start("HSolverLCAO", "solve");
 
+#if defined(__CUDA) && defined(__MPI)
+    auto* lcao_state = dynamic_cast<elecstate::ElecStateLCAO<TK>*>(pes);
+    lcao_state->clear_k_owner_wfc();
+#endif
+
     if (this->method != "pexsi")
     {
         bool used_k_owner_dmr = false;
@@ -164,6 +169,9 @@ void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
         if (used_k_owner_dmr)
         {
             cal_dmr_psi_k_owner_dispatch(dm.get_paraV_pointer(), pes->wg, owner_wfc, dm);
+#if defined(__CUDA) && defined(__MPI)
+            lcao_state->retain_k_owner_wfc(std::move(owner_wfc));
+#endif
         }
         else
         {

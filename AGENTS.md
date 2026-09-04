@@ -26,6 +26,15 @@ rules. Read the complete governance document before making or reviewing changes:
   8. Declare one variable per line; do not use comma-separated declarations.
   9. Do not call MPI routines directly; use the internally-guarded wrappers
      (e.g., `Parallel_Reduce::reduce_*`, `Parallel_Common::bcast_*`) instead.
+  10. Do not write new `#define private public` or `#define protected public`
+      access hacks in test files. If a unit test needs to inspect internal
+      state, either promote the member visibility explicitly or add a
+      public test-only accessor.
+  11. New unit test source files shall be named `test_<module_name>.cpp`,
+      matching the source file they exercise. For example, the test for
+      `rhog_io.cpp` shall be `test_rhog_io.cpp`. This naming keeps the
+      file-to-test relationship discoverable and consistent across the
+      repository. Historical tests are not required to be renamed.
 - Use LF line endings for text files. Only `.bat` and `.cmd` files may use CRLF.
 - Keep source file additions deterministic: update the relevant `CMakeLists.txt`
   or explain why the file is generated or included indirectly.
@@ -34,6 +43,10 @@ rules. Read the complete governance document before making or reviewing changes:
   is required.
 - Report the exact verification performed. Do not claim completion without
   fresh test or check output.
+- For multi-step refactors (e.g., splitting a large `.cpp` into several
+  files), build and commit after each step rather than batching all changes
+  before verification. This keeps the blast radius small when a step
+  surfaces a missing include or instantiation error.
 - Prefer `std::vector` over raw `new`/`delete` for dynamic arrays; before
   converting class members, confirm no external code consumes them as raw
   pointers (e.g., `std::vector<bool>` has no `.data()`), and use
@@ -99,6 +112,9 @@ rules. Read the complete governance document before making or reviewing changes:
 - Member -> free function: inventory `this->` reads; pass as params (const
   for config, ref for mutable state); move only when body is `this`-free;
   keep thin wrapper; compile each step.
+- Extract a base-class nested-vector member in three steps (hold + forward,
+  switch writers, delete legacy) so no commit mixes old-storage writes with
+  new-storage reads.
 
 ## Local Commands
 
@@ -106,6 +122,8 @@ rules. Read the complete governance document before making or reviewing changes:
 python3 tools/03_code_analysis/agent_governance_check.py --staged
 python3 tools/03_code_analysis/agent_governance_check.py --base upstream/develop --head HEAD --format text
 pre-commit run abacus-agent-governance --all-files
+# Score changed C++ files for quality debt (pass line is 60):
+python3 tools/03_code_analysis/code_quality_score.py $(git diff --name-only upstream/develop...HEAD | grep -E '\.(cpp|h)$')
 ```
 
 The repository text files have been normalized to LF once. Day-to-day line

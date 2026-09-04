@@ -6,6 +6,11 @@ add_library(
     xc_ncgga_radial.cpp
     xc_pot.cpp
     xc_grad.cpp
+    xc_grad_prepare.cpp
+    xc_grad_kernel.cpp
+    xc_grad_assemble.cpp
+    xc_grad_wfc.cpp
+    xc_grad_utils.cpp
     xc_lda_wrap.cpp
     xc_gga_wrap.cpp
     xc_lda_exch.cpp

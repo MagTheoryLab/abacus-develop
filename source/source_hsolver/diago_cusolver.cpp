@@ -7,6 +7,7 @@
 #include "source_base/timer.h"
 
 #include <memory>
+#include <algorithm>
 #include <type_traits>
 #include <vector>
 
@@ -69,6 +70,17 @@ void DiagoCusolver<T>::diag_device(
                           psi.get_nbands());
     const int inc = 1;
     BlasConnector::copy(this->nbands, eigen.data(), inc, eigenvalue_in, inc);
+    ModuleBase::timer::end("DiagoCusolver", "cusolver");
+}
+
+template <typename T>
+void DiagoCusolver<T>::diag_device_input(T* h, T* s,
+                                        psi::Psi<T, base_device::DEVICE_GPU>& psi, Real* eigenvalue_in)
+{
+    ModuleBase::timer::start("DiagoCusolver", "cusolver");
+    std::vector<double> eigen(this->nlocal, 0.0);
+    this->dc.Dngvd_device_input(this->nlocal, h, s, eigen.data(), psi.get_pointer(), psi.get_nbands());
+    std::copy(eigen.begin(), eigen.begin() + this->nbands, eigenvalue_in);
     ModuleBase::timer::end("DiagoCusolver", "cusolver");
 }
 

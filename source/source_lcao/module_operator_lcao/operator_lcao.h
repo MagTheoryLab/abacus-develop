@@ -32,6 +32,10 @@ class OperatorLCAO : public Operator<TK> {
     class, but must override in derived class */
     virtual void init(const int ik_in) override;
 
+    /// Shared real-space construction; optionally defer ordinary H/S folding.
+    /// Returns whether H(R) may have changed, including incremental constraints.
+    bool init(int ik_in, bool fold_k);
+
     void refresh_h();
 
     /* Function getHR() is designed to update HR matrix only, it will loop all

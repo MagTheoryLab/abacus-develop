@@ -1,8 +1,8 @@
 #include "gint_vl_nspin4_gpu.h"
-#include "gint_common.h"
 #include "gint_helper.h"
 #include "batch_biggrid.h"
 #include "kernel/phi_operator_gpu.h"
+#include "kernel/spinor_hr_gpu.h"
 #include "source_base/module_device/device_check.h"
 
 namespace ModuleGint
@@ -14,7 +14,10 @@ void Gint_vl_nspin4_gpu::cal_gint()
     ModuleBase::timer::start("Gint", "cal_gint_vl");
     init_hr_gint_();
     cal_hr_gint_();
-    merge_hr_part_to_hR(hr_gint_part_, hR_, *gint_info_);
+    auto& transfer = gint_info_->spinor_hr_transfer(hr_gint_part_[0], *hR_);
+    transfer.transfer(hr_gint_part_d_[0].get_device_ptr(), hr_gint_part_d_[1].get_device_ptr(),
+                      hr_gint_part_d_[2].get_device_ptr(), hr_gint_part_d_[3].get_device_ptr(),
+                      transverse_, *hR_);
     ModuleBase::timer::end("Gint", "cal_gint_vl");
 }
 
@@ -39,16 +42,6 @@ void Gint_vl_nspin4_gpu::transfer_cpu_to_gpu_()
                   gint_info_->get_local_mgrid_num() * sizeof(double), cudaMemcpyHostToDevice));
     }
 }
-
-void Gint_vl_nspin4_gpu::transfer_gpu_to_cpu_()
-{
-    for(int i = 0; i < nspin_; i++)
-    {
-        CHECK_CUDA(cudaMemcpy(hr_gint_part_[i].get_wrapper(), hr_gint_part_d_[i].get_device_ptr(), 
-                             hr_gint_part_[i].get_nnr() * sizeof(double), cudaMemcpyDeviceToHost));
-    }
-}
-
 
 void Gint_vl_nspin4_gpu::cal_hr_gint_()
 {
@@ -84,7 +77,6 @@ void Gint_vl_nspin4_gpu::cal_hr_gint_()
         CHECK_CUDA(cudaStreamSynchronize(stream));
         CHECK_CUDA(cudaStreamDestroy(stream));
     }
-    transfer_gpu_to_cpu_();
 }
 
 } // namespace ModuleGint

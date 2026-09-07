@@ -9,7 +9,12 @@ list(APPEND objects
     func_folding.cpp
     transfer.cpp
     func_transfer.cpp
+    density_gather.cpp
 )
+
+if(USE_CUDA)
+    list(APPEND objects folding_hr_gpu.cu)
+endif()
 
 add_library(
     hcontainer

@@ -22,7 +22,7 @@ HTransPara<T>::HTransPara(int n_processes, HContainer<T>* hr_in)
     this->hr = hr_in;
     this->ap_indexes.resize(n_processes);
     this->size_values.resize(n_processes);
-    this->paraV = hr_in->get_atom_pair(0).get_paraV();
+    this->paraV = hr_in->get_paraV();
     this->atom_i_index.resize(n_processes);
 }
 

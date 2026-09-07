@@ -19,8 +19,14 @@
 #include "source_hamilt/module_gint/kernel/gint_gpu_vars.h"
 #endif
 
+namespace hamilt { class DensityGather; }
+
 namespace ModuleGint
 {
+
+#ifdef __CUDA
+class SpinorHrGpu;
+#endif
 
 class GintInfo
 {
@@ -143,6 +149,9 @@ class GintInfo
     std::shared_ptr<const GintGpuVars> get_gpu_vars() const { return gpu_vars_; };
     int get_dev_id() const { return gpu_vars_->dev_id_; };
     int get_streams_num() const { return streams_num_; };
+    SpinorHrGpu& spinor_hr_transfer(const HContainer<double>& source,
+                                    const HContainer<std::complex<double>>& destination);
+    const HContainer<double>& gather_spinor_density(const HContainer<double>& source);
     
     private:
     void init_bgrid_batches_(int batch_size);
@@ -150,6 +159,8 @@ class GintInfo
     std::shared_ptr<const GintGpuVars> gpu_vars_;
     // More streams can improve parallelism and may speed up grid integration, at the cost of higher GPU memory usage.
     int streams_num_;
+    std::shared_ptr<SpinorHrGpu> spinor_hr_transfer_;
+    std::shared_ptr<hamilt::DensityGather> density_gather_;
     #endif
 };
 

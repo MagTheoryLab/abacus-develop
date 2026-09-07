@@ -36,6 +36,8 @@ class DiagoCusolver
                      psi::Psi<T, base_device::DEVICE_GPU>& psi,
                      Real* eigenvalue_in);
 
+    void diag_device_input(T* h, T* s, psi::Psi<T, base_device::DEVICE_GPU>& psi, Real* eigenvalue_in);
+
     // Static variable to keep track of the decomposition state
     static int DecomposedState;
 

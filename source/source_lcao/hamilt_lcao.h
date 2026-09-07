@@ -35,6 +35,9 @@ struct Exx_Info;
 
 namespace hamilt
 {
+#ifdef __CUDA
+class FoldingHrGpu;
+#endif
 
 // template first for type of k space H matrix elements
 // template second for type of temporary matrix, 
@@ -77,16 +80,7 @@ class HamiltLCAO : public Hamilt<TK>
                const TwoCenterIntegrator& intor_overlap_orb,
                const std::vector<double>& orb_cutoff);
 
-    ~HamiltLCAO()
-    {
-        if (this->ops != nullptr)
-        {
-            delete this->ops;
-        }
-        delete this->hR;
-        delete this->sR;
-        delete this->hsk;
-    }
+    ~HamiltLCAO();
 
     /// get pointer of Operator<TK> ops
     Operator<TK>*& getOperator();
@@ -149,6 +143,7 @@ class HamiltLCAO : public Hamilt<TK>
 
     // for target K point, update consequence of hPsi() and matrix()
     virtual void updateHk(const int ik) override;
+    bool updateHk_device(int ik, TK*& h, TK*& s) override;
 
     /**
      * @brief special for LCAO, update SK only
@@ -165,6 +160,15 @@ class HamiltLCAO : public Hamilt<TK>
     void matrix(MatrixBlock<TK>& hk_in, MatrixBlock<TK>& sk_in) override;
 
   private:
+
+    void updateHk_impl(int ik, bool fold_k);
+    std::size_t hr_revision_ = 0;
+#ifdef __CUDA
+    // Geometry-owned metadata; numerical H(R) validity is tracked separately.
+    std::unique_ptr<FoldingHrGpu> h_fold_;
+    std::unique_ptr<FoldingHrGpu> s_fold_;
+    std::size_t gpu_hr_revision_ = 0;
+#endif
 
     const K_Vectors* kv = nullptr;
 

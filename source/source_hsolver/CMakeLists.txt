@@ -51,6 +51,9 @@ if(ENABLE_LCAO)
             diago_cusolvermp.h
         )
       endif()
+      if(ENABLE_MPI)
+        list(APPEND cuda_objects ./kernels/cuda/k_owner_matrix_gpu.cu)
+      endif()
     add_library(
         diag_cusolver
         OBJECT

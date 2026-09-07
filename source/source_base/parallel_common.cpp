@@ -116,6 +116,25 @@ int communicator_size(MPI_Comm comm)
     return size;
 }
 
+void alltoall_int(const int* sendbuf, int* recvbuf, MPI_Comm comm)
+{
+    MPI_Alltoall(sendbuf, 1, MPI_INT, recvbuf, 1, MPI_INT, comm);
+}
+
+void alltoallv_int(const int* sendbuf, const int* sendcounts, const int* senddispls,
+                  int* recvbuf, const int* recvcounts, const int* recvdispls, MPI_Comm comm)
+{
+    MPI_Alltoallv(sendbuf, sendcounts, senddispls, MPI_INT,
+                  recvbuf, recvcounts, recvdispls, MPI_INT, comm);
+}
+
+void alltoallv_double(const double* sendbuf, const int* sendcounts, const int* senddispls,
+                     double* recvbuf, const int* recvcounts, const int* recvdispls, MPI_Comm comm)
+{
+    MPI_Alltoallv(sendbuf, sendcounts, senddispls, MPI_DOUBLE,
+                  recvbuf, recvcounts, recvdispls, MPI_DOUBLE, comm);
+}
+
 void allgather_int(const int* sendbuf, int sendcount, int* recvbuf, MPI_Comm comm)
 {
     MPI_Allgather(sendbuf, sendcount, MPI_INT, recvbuf, sendcount, MPI_INT, comm);

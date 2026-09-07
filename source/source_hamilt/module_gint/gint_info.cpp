@@ -5,9 +5,41 @@
 #include "gint_info.h"
 #include "gint_type.h"
 #include "source_base/memory_recorder.h"
+#ifdef __CUDA
+#include "kernel/spinor_hr_gpu.h"
+#include "source_hamilt/module_hcontainer/density_gather.h"
+#include "source_base/parallel_reduce.h"
+#endif
 
 namespace ModuleGint
 {
+
+#ifdef __CUDA
+const HContainer<double>& GintInfo::gather_spinor_density(const HContainer<double>& source)
+{
+    int rebuild = !density_gather_ || !density_gather_->matches(source);
+    Parallel_Reduce::reduce_all(rebuild);
+    if (rebuild)
+    {
+        density_gather_.reset(new hamilt::DensityGather(source, get_hr<double>(2)));
+    }
+    return density_gather_->gather(source);
+}
+
+SpinorHrGpu& GintInfo::spinor_hr_transfer(const HContainer<double>& source,
+                                        const HContainer<std::complex<double>>& destination)
+{
+    int rebuild = !spinor_hr_transfer_ || !spinor_hr_transfer_->matches(destination);
+    // Metadata construction is collective, even when only one rank's local
+    // ownership changed. Never let ranks enter different collective sequences.
+    Parallel_Reduce::reduce_all(rebuild);
+    if (rebuild)
+    {
+        spinor_hr_transfer_.reset(new SpinorHrGpu(source, destination));
+    }
+    return *spinor_hr_transfer_;
+}
+#endif
 
 GintInfo::GintInfo(
     int nbx, int nby, int nbz,

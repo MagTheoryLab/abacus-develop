@@ -51,11 +51,17 @@ class Diag_Cusolver_gvd{
 //          N: the dimension of the matrix
     void init_double(int N);
     void init_complex(int N);
-    void solve_double(int N, int M, double* A, double* B, double* W);
-    void solve_complex(int N, int M, std::complex<double>* A, std::complex<double>* B, double* W);
+    void solve_double(int N, int M, double* A, double* B, double* W, cudaMemcpyKind input_copy);
+    void solve_complex(int N, int M, std::complex<double>* A, std::complex<double>* B, double* W,
+                       cudaMemcpyKind input_copy);
 
     void finalize();  // for recycling the usage of the static class Diag_Cusolver_gvd
 public:
+
+    // H/S and V are device buffers; W remains a host output. H/S are preserved.
+    void Dngvd_device_input(int N, double* A, double* B, double* W, double* V, int nvec);
+    void Dngvd_device_input(int N, std::complex<double>* A, std::complex<double>* B,
+                            double* W, std::complex<double>* V, int nvec);
 
     int is_init = 0;    // For expensive gpu initialization only once when using cusolver for lcao
 

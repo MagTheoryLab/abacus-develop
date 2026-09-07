@@ -18,6 +18,8 @@
 
 #ifdef __CUDA
 #include "diago_cusolver.h"
+#include "kernels/cuda/k_owner_matrix_gpu.h"
+#include <type_traits>
 #endif
 
 #ifdef __PEXSI
@@ -452,6 +454,12 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
 
     std::vector<T> hk_mat; // temporary storage for H(k) matrix collected from all processes
     std::vector<T> sk_mat; // temporary storage for S(k) matrix collected from all processes
+    std::unique_ptr<KOwnerMatrixGpu> device_matrices;
+    // A single rank already owns the dense matrix; it needs no redistribution.
+    if (world_size > 1 && owner_wfc != nullptr && std::is_same<T, std::complex<double>>::value)
+    {
+        device_matrices.reset(new KOwnerMatrixGpu(*this->ParaV, world_rank));
+    }
     // In each iteration, we process total_active_ranks k-points.
     for(int ik_start = 0; ik_start < nks; ik_start += total_active_ranks)
     {
@@ -465,13 +473,34 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
             if (is_active)
             {
                 kpt_assigned = ik;
-                hk_mat.resize(nrow * ncol);
-                sk_mat.resize(nrow * ncol);
+                if (!device_matrices)
+                {
+                    ModuleBase::timer::start("HSolverLCAO", "owner_host_resize");
+                    hk_mat.resize(nrow * ncol);
+                    sk_mat.resize(nrow * ncol);
+                    ModuleBase::timer::end("HSolverLCAO", "owner_host_resize");
+                }
+            }
+            T* h_device = nullptr;
+            T* s_device = nullptr;
+            if (device_matrices && pHamilt->updateHk_device(ik, h_device, s_device))
+            {
+                device_matrices->gather_device(reinterpret_cast<const std::complex<double>*>(h_device),
+                                               reinterpret_cast<const std::complex<double>*>(s_device),
+                                               active_ranks[ik % total_active_ranks]);
+                continue;
             }
             pHamilt->updateHk(ik);
             hamilt::MatrixBlock<T> hk_2D;
             hamilt::MatrixBlock<T> sk_2D;
             pHamilt->matrix(hk_2D, sk_2D);
+            if (device_matrices)
+            {
+                device_matrices->gather(reinterpret_cast<const std::complex<double>*>(hk_2D.p),
+                                        reinterpret_cast<const std::complex<double>*>(sk_2D.p),
+                                        active_ranks[ik % total_active_ranks]);
+                continue;
+            }
             int desc_tmp[9];
             T* hk_local_ptr = hk_mat.data();
             T* sk_local_ptr = sk_mat.data();
@@ -481,12 +510,16 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
                 desc_tmp[1] = -1;
             }
 
+            ModuleBase::timer::start("HSolverLCAO", "gather_hk");
             Cpxgemr2d(nrow, ncol, hk_2D.p, 1, 1, mat_para_global.desc,
                       hk_local_ptr, 1, 1, desc_tmp,
                       mat_para_global.blacs_ctxt);
+            ModuleBase::timer::end("HSolverLCAO", "gather_hk");
+            ModuleBase::timer::start("HSolverLCAO", "gather_sk");
             Cpxgemr2d(nrow, ncol, sk_2D.p, 1, 1, mat_para_global.desc,
                       sk_local_ptr, 1, 1, desc_tmp,
                       mat_para_global.blacs_ctxt);
+            ModuleBase::timer::end("HSolverLCAO", "gather_sk");
         }
 
         // diagonalize the Hamiltonian matrix using cusolver
@@ -505,7 +538,16 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
             {
                 psi_local_device.reset(new psi::Psi<T, base_device::DEVICE_GPU>());
                 psi_local_device->resize(1, nbands, nrow);
-                cu.diag_device(hk_local, sk_local, *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
+                if (device_matrices)
+                {
+                    cu.diag_device_input(reinterpret_cast<T*>(device_matrices->h_device()),
+                                         reinterpret_cast<T*>(device_matrices->s_device()),
+                                         *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
+                }
+                else
+                {
+                    cu.diag_device(hk_local, sk_local, *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
+                }
             }
             else
             {

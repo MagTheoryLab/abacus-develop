@@ -30,6 +30,7 @@ list(APPEND objects
 if(USE_CUDA)
   list(APPEND objects
       kernel/gint_gpu_vars.cpp
+      kernel/spinor_hr_gpu.cu
       kernel/phi_operator_gpu.cu
       kernel/phi_operator_kernel.cu
       kernel/set_const_mem.cu

@@ -120,6 +120,13 @@ if (ENABLE_MPI)
     ../kernels/cuda/diag_cusolver.cu
   )
   target_compile_definitions(MODULE_HSOLVER_LCAO_cusolver PRIVATE __CUDA)
+  AddTest(
+    TARGET MODULE_HSOLVER_k_owner_matrix_gpu
+    LIBS parameter base device
+    SOURCES k_owner_matrix_gpu_test.cpp ../kernels/cuda/k_owner_matrix_gpu.cu
+            ../kernels/cuda/diag_cusolver.cu
+  )
+  target_compile_definitions(MODULE_HSOLVER_k_owner_matrix_gpu PRIVATE __CUDA)
   endif()
 endif()
 install(FILES H-KPoints-Si2.dat DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

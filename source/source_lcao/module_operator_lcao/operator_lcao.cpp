@@ -68,6 +68,12 @@ void OperatorLCAO<TK, TR>::set_hr_done(bool hr_done_in) {
 
 template <typename TK, typename TR>
 void OperatorLCAO<TK, TR>::init(const int ik_in) {
+    this->init(ik_in, true);
+}
+
+template <typename TK, typename TR>
+bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
+    bool hr_changed = !this->hr_done || this->cal_type == calculation_type::lcao_sc_lambda;
     ModuleBase::TITLE("OperatorLCAO", "init");
     ModuleBase::timer::start("OperatorLCAO", "init");
     if (this->is_first_node) {
@@ -96,7 +102,7 @@ void OperatorLCAO<TK, TR>::init(const int ik_in) {
 
             // update SK next
             // in cal_type=lcao_overlap, SK should be update here
-            this->contributeHk(ik_in);
+            if (fold_k) this->contributeHk(ik_in);
 
             break;
         }
@@ -215,16 +221,18 @@ void OperatorLCAO<TK, TR>::init(const int ik_in) {
         }
         // call init() function of next node
         ModuleBase::timer::end("OperatorLCAO", "init");
-        this->next_op->init(ik_in);
+        const bool next_changed = dynamic_cast<OperatorLCAO<TK, TR>*>(this->next_op)->init(ik_in, fold_k);
+        hr_changed = hr_changed || next_changed;
         ModuleBase::timer::start("OperatorLCAO", "init");
     } else { // it is the last node, update HK with the current total HR
-        OperatorLCAO<TK, TR>::contributeHk(ik_in);
+        if (fold_k) OperatorLCAO<TK, TR>::contributeHk(ik_in);
     }
 
     // set HR status of this node to done
     this->hr_done = true;
 
     ModuleBase::timer::end("OperatorLCAO", "init");
+    return hr_changed;
 }
 
 // contributeHk()

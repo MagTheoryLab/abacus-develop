@@ -11,6 +11,9 @@
 #include "source_io/module_parameter/parameter.h"
 
 #include <vector>
+#ifdef __CUDA
+#include "source_hamilt/module_hcontainer/folding_hr_gpu.h"
+#endif
 
 #ifdef __MLALGO
 #include "source_lcao/module_deepks/lcao_deepks.h"
@@ -47,6 +50,59 @@
 
 namespace hamilt
 {
+
+template <typename TK, typename TR>
+HamiltLCAO<TK, TR>::~HamiltLCAO()
+{
+    delete this->ops;
+    delete this->hR;
+    delete this->sR;
+    delete this->hsk;
+}
+
+template <typename TK, typename TR>
+bool HamiltLCAO<TK, TR>::updateHk_device(int ik, TK*& h, TK*& s)
+{
+    return false;
+}
+
+#ifdef __CUDA
+template <>
+bool HamiltLCAO<std::complex<double>, std::complex<double>>::updateHk_device(
+    int ik, std::complex<double>*& h, std::complex<double>*& s)
+{
+    // These operators also contribute directly in k space. Keep their existing
+    // folding/gauge workflow intact, before mutating any real-space state.
+    for (auto* op = this->ops; op != nullptr; op = op->next_op)
+    {
+        if (op->get_cal_type() == calculation_type::lcao_deepks
+            || op->get_cal_type() == calculation_type::lcao_tddft_periodic)
+        {
+            return false;
+        }
+    }
+    this->updateHk_impl(ik, false);
+    if (!this->h_fold_)
+    {
+        this->h_fold_.reset(new FoldingHrGpu(*this->hR, this->kv->kvec_d));
+        this->h_fold_->upload(*this->hR);
+        this->gpu_hr_revision_ = this->hr_revision_;
+    }
+    else if (this->gpu_hr_revision_ != this->hr_revision_)
+    {
+        this->h_fold_->upload(*this->hR);
+        this->gpu_hr_revision_ = this->hr_revision_;
+    }
+    if (!this->s_fold_)
+    {
+        this->s_fold_.reset(new FoldingHrGpu(*this->sR, this->kv->kvec_d));
+        this->s_fold_->upload(*this->sR);
+    }
+    h = this->h_fold_->fold(ik);
+    s = this->s_fold_->fold(ik);
+    return true;
+}
+#endif
 
 template <typename TK, typename TR>
 HamiltLCAO<TK, TR>::HamiltLCAO(const UnitCell& ucell,
@@ -489,6 +545,12 @@ void HamiltLCAO<TK, TR>::matrix(MatrixBlock<TK>& hk_in, MatrixBlock<TK>& sk_in)
 template <typename TK, typename TR>
 void HamiltLCAO<TK, TR>::updateHk(const int ik)
 {
+    this->updateHk_impl(ik, true);
+}
+
+template <typename TK, typename TR>
+void HamiltLCAO<TK, TR>::updateHk_impl(const int ik, const bool fold_k)
+{
     ModuleBase::TITLE("HamiltLCAO", "updateHk");
     ModuleBase::timer::start("HamiltLCAO", "updateHk");
 
@@ -509,7 +571,10 @@ void HamiltLCAO<TK, TR>::updateHk(const int ik)
         this->current_spin = this->kv->isk[ik];
         dynamic_cast<hamilt::OperatorLCAO<TK, TR>*>(this->ops)->set_current_spin(this->kv->isk[ik]);
     }
-    this->getOperator()->init(ik);
+    if (dynamic_cast<OperatorLCAO<TK, TR>*>(this->getOperator())->init(ik, fold_k))
+    {
+        ++this->hr_revision_;
+    }
     ModuleBase::timer::end("HamiltLCAO", "updateHk");
 }
 

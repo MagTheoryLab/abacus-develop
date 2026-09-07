@@ -26,6 +26,43 @@
 namespace ModuleGint
 {
 
+namespace
+{
+// Share device selection for the two spinor-potential entry points. An empty
+// kinetic potential denotes ordinary LDA/GGA; public interfaces stay unchanged.
+void cal_spinor_potential(std::vector<const double*> vr_eff,
+                          std::vector<const double*> vofk,
+                          HContainer<std::complex<double>>* hR)
+{
+#ifdef __CUDA
+    if (PARAM.inp.device == "gpu")
+    {
+        if (vofk.empty())
+        {
+            Gint_vl_nspin4_gpu operation(vr_eff, hR, PARAM.globalv.domag);
+            operation.cal_gint();
+        }
+        else
+        {
+            Gint_vl_metagga_nspin4_gpu operation(vr_eff, vofk, hR);
+            operation.cal_gint();
+        }
+        return;
+    }
+#endif
+    if (vofk.empty())
+    {
+        Gint_vl_nspin4 operation(vr_eff, hR);
+        operation.cal_gint();
+    }
+    else
+    {
+        Gint_vl_metagga_nspin4 operation(vr_eff, vofk, hR);
+        operation.cal_gint();
+    }
+}
+}
+
 void cal_gint_vl(
     const double* vr_eff,
     HContainer<double>* hR)
@@ -48,17 +85,7 @@ void cal_gint_vl(
     std::vector<const double*> vr_eff,
     HContainer<std::complex<double>>* hR)
 {
-    #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
-    {
-        Gint_vl_nspin4_gpu gint_vl_nspin4(vr_eff, hR);
-        gint_vl_nspin4.cal_gint();
-    } else
-    #endif
-    {
-        Gint_vl_nspin4 gint_vl_nspin4(vr_eff, hR);
-        gint_vl_nspin4.cal_gint();
-    }
+    cal_spinor_potential(vr_eff, {}, hR);
 }
 
 void cal_gint_vl_metagga(
@@ -85,17 +112,7 @@ void cal_gint_vl_metagga(
     std::vector<const double*> vofk,
     HContainer<std::complex<double>>* hR)
 {
-#ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
-    {
-        Gint_vl_metagga_nspin4_gpu gint_vl_metagga_nspin4(vr_eff, vofk, hR);
-        gint_vl_metagga_nspin4.cal_gint();
-    } else
-#endif
-    {
-        Gint_vl_metagga_nspin4 gint_vl_metagga_nspin4(vr_eff, vofk, hR);
-        gint_vl_metagga_nspin4.cal_gint();
-    }
+    cal_spinor_potential(vr_eff, vofk, hR);
 }
 
 void cal_gint_rho(

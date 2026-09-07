@@ -36,7 +36,37 @@ void Gint_rho_gpu::cal_gint_impl_()
     }
 
     // 2. Transfer dm from 2D parallel distribution to gint serial distribution
-    dm_2d_to_gint(*gint_info_, dm_vec_, dm_gint_vec);
+    if (nspin_ == 4)
+    {
+        // Exchange the interleaved spin blocks together using one fixed
+        // geometry plan, instead of rebuilding four scalar transfer plans.
+        const auto& serial = gint_info_->gather_spinor_density(*dm_vec_[0]);
+        ModuleBase::timer::start("Gint", "dm_split_channels");
+        for (int i = 0; i < serial.size_atom_pairs(); ++i)
+        {
+            const auto& ap = serial.get_atom_pair(i);
+            for (int ir = 0; ir < ap.get_R_size(); ++ir)
+            {
+                const auto R = ap.get_R_index(ir);
+                const double* input = ap.get_pointer(ir);
+                for (int spin = 0; spin < 4; ++spin)
+                {
+                    Real* output = dm_gint_vec[spin].find_matrix(ap.get_atom_i(), ap.get_atom_j(), R)->get_pointer();
+                    const int rows = ap.get_row_size() / 2;
+                    const int cols = ap.get_col_size() / 2;
+                    for (int row = 0; row < rows; ++row)
+                        for (int col = 0; col < cols; ++col)
+                            output[row * cols + col] = static_cast<Real>(
+                                input[(2 * row + spin / 2) * ap.get_col_size() + 2 * col + spin % 2]);
+                }
+            }
+        }
+        ModuleBase::timer::end("Gint", "dm_split_channels");
+    }
+    else
+    {
+        dm_2d_to_gint(*gint_info_, dm_vec_, dm_gint_vec);
+    }
 
     // 3. Transfer dm to GPU. rho_d is always double — the kernel accumulates
     //    in fp64 regardless of the input precision.

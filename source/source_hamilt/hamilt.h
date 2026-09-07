@@ -21,6 +21,10 @@ class Hamilt : public HamiltBase
     /// for target K point, update consequence of hPsi() and matrix()
     void updateHk(const int ik) override { return; }
 
+    /// Optional column-major device matrices, borrowed until the next update.
+    /// A false return leaves the Hamiltonian unchanged; use updateHk/matrix.
+    virtual bool updateHk_device(int ik, T*& h, T*& s) { return false; }
+
     /// refresh status of Hamiltonian, for example, refresh H(R) and S(R) in LCAO case
     void refresh(bool yes = true) override { return; }
 

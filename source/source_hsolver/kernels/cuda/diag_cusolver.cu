@@ -64,15 +64,15 @@ void Diag_Cusolver_gvd::init_complex(int N){
     CHECK_CUDA( cudaMalloc ((void**)&devInfo, sizeof(int)) );
 }
         
-void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double* W)
+void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double* W, cudaMemcpyKind input_copy)
 {
     assert(N == M);
     if (M != m) {
         this->finalize();
         this->init_double(M);
     }
-    CHECK_CUDA(cudaMemcpy(d_A, A, sizeof(double) * lda * m, cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_B, B, sizeof(double) * lda * m, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_A, A, sizeof(double) * lda * m, input_copy));
+    CHECK_CUDA(cudaMemcpy(d_B, B, sizeof(double) * lda * m, input_copy));
     CHECK_CUSOLVER(cusolverDnDsygvd_bufferSize(
         cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, &lwork));
     CHECK_CUDA(cudaMalloc((void**)&d_work, sizeof(double) * lwork));
@@ -87,15 +87,15 @@ void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double*
 }
 
 void Diag_Cusolver_gvd::solve_complex(
-    int N, int M, std::complex<double>* A, std::complex<double>* B, double* W)
+    int N, int M, std::complex<double>* A, std::complex<double>* B, double* W, cudaMemcpyKind input_copy)
 {
     assert(N == M);
     if (M != m) {
         this->finalize();
         this->init_complex(M);
     }
-    CHECK_CUDA(cudaMemcpy(d_A2, A, sizeof(cuDoubleComplex) * lda * m, cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_B2, B, sizeof(cuDoubleComplex) * lda * m, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_A2, A, sizeof(cuDoubleComplex) * lda * m, input_copy));
+    CHECK_CUDA(cudaMemcpy(d_B2, B, sizeof(cuDoubleComplex) * lda * m, input_copy));
     CHECK_CUSOLVER(cusolverDnZhegvd_bufferSize(
         cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, &lwork));
     CHECK_CUDA(cudaMalloc((void**)&d_work2, sizeof(cuDoubleComplex) * lwork));
@@ -111,7 +111,7 @@ void Diag_Cusolver_gvd::solve_complex(
 
 void Diag_Cusolver_gvd::Dngvd_double(int N, int M, double* A, double* B, double* W, double* V)
 {
-    this->solve_double(N, M, A, B, W);
+    this->solve_double(N, M, A, B, W, cudaMemcpyHostToDevice);
     CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * m, cudaMemcpyDeviceToHost));
 }
 
@@ -119,14 +119,14 @@ void Diag_Cusolver_gvd::Dngvd_double_device(
     int N, int M, double* A, double* B, double* W, double* V, int nvec)
 {
     assert(nvec <= N);
-    this->solve_double(N, M, A, B, W);
+    this->solve_double(N, M, A, B, W, cudaMemcpyHostToDevice);
     CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * nvec, cudaMemcpyDeviceToDevice));
 }
 
 void Diag_Cusolver_gvd::Dngvd_complex(
     int N, int M, std::complex<double>* A, std::complex<double>* B, double* W, std::complex<double>* V)
 {
-    this->solve_complex(N, M, A, B, W);
+    this->solve_complex(N, M, A, B, W, cudaMemcpyHostToDevice);
     CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * m, cudaMemcpyDeviceToHost));
 }
 
@@ -140,6 +140,21 @@ void Diag_Cusolver_gvd::Dngvd_complex_device(
     int nvec)
 {
     assert(nvec <= N);
-    this->solve_complex(N, M, A, B, W);
+    this->solve_complex(N, M, A, B, W, cudaMemcpyHostToDevice);
+    CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * nvec, cudaMemcpyDeviceToDevice));
+}
+
+void Diag_Cusolver_gvd::Dngvd_device_input(int N, double* A, double* B, double* W, double* V, int nvec)
+{
+    assert(nvec <= N);
+    this->solve_double(N, N, A, B, W, cudaMemcpyDeviceToDevice);
+    CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * nvec, cudaMemcpyDeviceToDevice));
+}
+
+void Diag_Cusolver_gvd::Dngvd_device_input(int N, std::complex<double>* A, std::complex<double>* B,
+                                        double* W, std::complex<double>* V, int nvec)
+{
+    assert(nvec <= N);
+    this->solve_complex(N, N, A, B, W, cudaMemcpyDeviceToDevice);
     CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * nvec, cudaMemcpyDeviceToDevice));
 }

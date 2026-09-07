@@ -36,14 +36,17 @@ TEST(DiagoCusolverDeviceTest, ComplexEigenvectorsRemainOnDevice)
     psi_device.resize(1, nbands, nlocal);
     double eigen_host[nbands]{};
     double eigen_device[nbands]{};
+    double eigen_device_reused[nbands]{};
 
     hsolver::DiagoCusolver<std::complex<double>> host_solver(nlocal, nbands);
     host_solver.diag(h_mat, s_mat, psi_host, eigen_host);
     hsolver::DiagoCusolver<std::complex<double>> device_solver(nlocal, nbands);
     device_solver.diag_device(h_mat, s_mat, psi_device, eigen_device);
+    device_solver.diag_device(h_mat, s_mat, psi_device, eigen_device_reused);
     psi::Psi<std::complex<double>> psi_device_on_host(psi_device);
 
     EXPECT_NEAR(eigen_host[0], eigen_device[0], PASSTHRESHOLD);
+    EXPECT_NEAR(eigen_host[0], eigen_device_reused[0], PASSTHRESHOLD);
     for (int i = 0; i < nlocal; ++i)
     {
         for (int j = 0; j < nlocal; ++j)

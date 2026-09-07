@@ -25,9 +25,11 @@ class HSolverLCAO
                 const int nbands_in,
                 const double nelec_in,
                 const bool use_gpu_in,
-                const bool use_k_owner_dmr_in)
-        : ParaV(ParaV_in), method(method_in), kpar_lcao(kpar_lcao_in), nlocal(nlocal_in), nbands(nbands_in),
-          nelec(nelec_in), use_gpu(use_gpu_in), use_k_owner_dmr(use_k_owner_dmr_in) {}
+                const bool use_k_owner_dmr_in);
+    ~HSolverLCAO();
+
+    HSolverLCAO(const HSolverLCAO&) = delete;
+    HSolverLCAO& operator=(const HSolverLCAO&) = delete;
 
     void solve(hamilt::Hamilt<TK>* pHamilt,
                psi::Psi<TK>& psi,
@@ -62,6 +64,9 @@ class HSolverLCAO
     const double nelec;  // total number of electrons, only used by the pexsi branch
     const bool use_gpu;  // true if running on GPU, only used by the native-ELPA branch
     const bool use_k_owner_dmr; // keep cuSolver eigenvectors on their k owner and form DMR there
+
+    struct SolveContext;
+    std::unique_ptr<SolveContext> solve_context_;
 };
 
 } // namespace hsolver

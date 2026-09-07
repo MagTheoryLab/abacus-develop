@@ -15,6 +15,12 @@
 #include <memory>
 #include <complex>
 
+namespace hsolver
+{
+template <typename TK>
+class HSolverLCAO;
+}
+
 //-----------------------------------
 // ESolver for LCAO
 //-----------------------------------
@@ -101,6 +107,9 @@ class ESolver_KS_LCAO : public ESolver_KS
     bool have_force = false;
     
     GintPrecisionController gint_precision_controller_;
+
+    //! Reuse cuSolver GPU allocations and distribution metadata across SCF iterations.
+    std::unique_ptr<hsolver::HSolverLCAO<TK>> cusolver_lcao_;
 };
 } // namespace ModuleESolver
 #endif

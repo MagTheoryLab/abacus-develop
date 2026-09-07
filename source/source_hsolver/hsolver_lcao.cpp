@@ -77,6 +77,39 @@ void cal_dm_psi_dispatch<std::complex<double>>(
 } // namespace
 
 template <typename TK>
+struct HSolverLCAO<TK>::SolveContext
+{
+#if defined(__CUDA) && defined(__MPI)
+    std::unique_ptr<DiagoCusolver<TK>> cusolver;
+    std::unique_ptr<KOwnerMatrixGpu> device_matrices;
+#endif
+};
+
+template <typename TK>
+HSolverLCAO<TK>::HSolverLCAO(const Parallel_Orbitals* ParaV_in,
+                            const std::string method_in,
+                            const int kpar_lcao_in,
+                            const int nlocal_in,
+                            const int nbands_in,
+                            const double nelec_in,
+                            const bool use_gpu_in,
+                            const bool use_k_owner_dmr_in)
+    : ParaV(ParaV_in),
+      method(method_in),
+      kpar_lcao(kpar_lcao_in),
+      nlocal(nlocal_in),
+      nbands(nbands_in),
+      nelec(nelec_in),
+      use_gpu(use_gpu_in),
+      use_k_owner_dmr(use_k_owner_dmr_in),
+      solve_context_(new SolveContext())
+{
+}
+
+template <typename TK>
+HSolverLCAO<TK>::~HSolverLCAO() = default;
+
+template <typename TK>
 void HSolverLCAO<TK>::solve(hamilt::Hamilt<TK>* pHamilt,
                                    psi::Psi<TK>& psi,
 								   elecstate::ElecState* pes,
@@ -454,11 +487,19 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
 
     std::vector<T> hk_mat; // temporary storage for H(k) matrix collected from all processes
     std::vector<T> sk_mat; // temporary storage for S(k) matrix collected from all processes
-    std::unique_ptr<KOwnerMatrixGpu> device_matrices;
     // A single rank already owns the dense matrix; it needs no redistribution.
-    if (world_size > 1 && owner_wfc != nullptr && std::is_same<T, std::complex<double>>::value)
+    if (world_size > 1
+        && owner_wfc != nullptr
+        && std::is_same<T, std::complex<double>>::value
+        && !this->solve_context_->device_matrices)
     {
-        device_matrices.reset(new KOwnerMatrixGpu(*this->ParaV, world_rank));
+        this->solve_context_->device_matrices.reset(new KOwnerMatrixGpu(*this->ParaV, world_rank));
+    }
+    KOwnerMatrixGpu* device_matrices
+        = owner_wfc != nullptr ? this->solve_context_->device_matrices.get() : nullptr;
+    if (is_active && !this->solve_context_->cusolver)
+    {
+        this->solve_context_->cusolver.reset(new DiagoCusolver<T>(this->nlocal, this->nbands));
     }
     // In each iteration, we process total_active_ranks k-points.
     for(int ik_start = 0; ik_start < nks; ik_start += total_active_ranks)
@@ -527,7 +568,6 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
         std::unique_ptr<psi::Psi<T, base_device::DEVICE_GPU>> psi_local_device;
         if (kpt_assigned != -1)
         {
-            DiagoCusolver<T> cu(this->nlocal, this->nbands);
             hamilt::MatrixBlock<T> hk_local = hamilt::MatrixBlock<T>{
                     hk_mat.data(), (size_t)nrow, (size_t)ncol,
                     mat_para_local.desc};
@@ -540,20 +580,24 @@ void HSolverLCAO<T>::parakSolve_cusolver(hamilt::Hamilt<T>* pHamilt,
                 psi_local_device->resize(1, nbands, nrow);
                 if (device_matrices)
                 {
-                    cu.diag_device_input(reinterpret_cast<T*>(device_matrices->h_device()),
-                                         reinterpret_cast<T*>(device_matrices->s_device()),
-                                         *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
+                    this->solve_context_->cusolver->diag_device_input(
+                        reinterpret_cast<T*>(device_matrices->h_device()),
+                        reinterpret_cast<T*>(device_matrices->s_device()),
+                        *psi_local_device,
+                        &(pes->ekb(kpt_assigned, 0)));
                 }
                 else
                 {
-                    cu.diag_device(hk_local, sk_local, *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
+                    this->solve_context_->cusolver->diag_device(
+                        hk_local, sk_local, *psi_local_device, &(pes->ekb(kpt_assigned, 0)));
                 }
             }
             else
             {
                 psi_local.reset(new psi::Psi<T>());
                 psi_local->resize(1, nbands, nrow);
-                cu.diag(hk_local, sk_local, *psi_local, &(pes->ekb(kpt_assigned, 0)));
+                this->solve_context_->cusolver->diag(
+                    hk_local, sk_local, *psi_local, &(pes->ekb(kpt_assigned, 0)));
             }
         }
 

@@ -465,16 +465,47 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                      && !this->inp_->rdmft
                                      && !this->inp_->qo_switch
                                      && !this->exx_info_.info_global.cal_exx;
-        hsolver::HSolverLCAO<TK> hsolver_lcao_obj(&(this->pv),
-                                                  this->inp_->ks_solver,
-                                                  PARAM.globalv.kpar_lcao,
-                                                  PARAM.globalv.nlocal,
-                                                  this->inp_->nbands,
-                                                  this->inp_->nelec,
-                                                  this->inp_->device == "gpu",
-                                                  use_k_owner_dmr);
-        hsolver_lcao_obj.solve(static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt), this->psi[0], this->pelec, *this->dmat.dm, 
-          this->chr, this->inp_->nspin, skip_charge);
+        const int kpar_lcao = PARAM.globalv.kpar_lcao;
+        const int nlocal = PARAM.globalv.nlocal;
+        if (this->inp_->ks_solver == "cusolver")
+        {
+            if (!this->cusolver_lcao_)
+            {
+                this->cusolver_lcao_.reset(new hsolver::HSolverLCAO<TK>(&(this->pv),
+                                                                        this->inp_->ks_solver,
+                                                                        kpar_lcao,
+                                                                        nlocal,
+                                                                        this->inp_->nbands,
+                                                                        this->inp_->nelec,
+                                                                        this->inp_->device == "gpu",
+                                                                        use_k_owner_dmr));
+            }
+            this->cusolver_lcao_->solve(static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt),
+                                        this->psi[0],
+                                        this->pelec,
+                                        *this->dmat.dm,
+                                        this->chr,
+                                        this->inp_->nspin,
+                                        skip_charge);
+        }
+        else
+        {
+            hsolver::HSolverLCAO<TK> hsolver_lcao_obj(&(this->pv),
+                                                      this->inp_->ks_solver,
+                                                      kpar_lcao,
+                                                      nlocal,
+                                                      this->inp_->nbands,
+                                                      this->inp_->nelec,
+                                                      this->inp_->device == "gpu",
+                                                      use_k_owner_dmr);
+            hsolver_lcao_obj.solve(static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt),
+                                   this->psi[0],
+                                   this->pelec,
+                                   *this->dmat.dm,
+                                   this->chr,
+                                   this->inp_->nspin,
+                                   skip_charge);
+        }
     }
     else
     {

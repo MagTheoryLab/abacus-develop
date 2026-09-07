@@ -35,8 +35,13 @@ void Diag_Cusolver_gvd::finalize(){
     if (d_B      ) {CHECK_CUDA( cudaFree(d_B) );  d_B  = NULL;}
     if (d_A2     ) {CHECK_CUDA( cudaFree(d_A2) ); d_A2 = NULL;}
     if (d_B2     ) {CHECK_CUDA( cudaFree(d_B2) ); d_B2 = NULL;}
+    if (d_work   ) {CHECK_CUDA( cudaFree(d_work) ); d_work = NULL;}
+    if (d_work2  ) {CHECK_CUDA( cudaFree(d_work2) ); d_work2 = NULL;}
     if (d_W      ) {CHECK_CUDA( cudaFree(d_W) );  d_W  = NULL;}
     if (devInfo  ) {CHECK_CUDA( cudaFree(devInfo) );   devInfo = NULL;}
+    m = 0;
+    lda = 0;
+    lwork = 0;
 }
 
 Diag_Cusolver_gvd::~Diag_Cusolver_gvd(){
@@ -73,17 +78,18 @@ void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double*
     }
     CHECK_CUDA(cudaMemcpy(d_A, A, sizeof(double) * lda * m, input_copy));
     CHECK_CUDA(cudaMemcpy(d_B, B, sizeof(double) * lda * m, input_copy));
-    CHECK_CUSOLVER(cusolverDnDsygvd_bufferSize(
-        cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, &lwork));
-    CHECK_CUDA(cudaMalloc((void**)&d_work, sizeof(double) * lwork));
+    if (d_work == nullptr)
+    {
+        CHECK_CUSOLVER(cusolverDnDsygvd_bufferSize(
+            cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, &lwork));
+        CHECK_CUDA(cudaMalloc((void**)&d_work, sizeof(double) * lwork));
+    }
     CHECK_CUSOLVER(cusolverDnDsygvd(
         cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, d_work, lwork, devInfo));
     CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaMemcpy(W, d_W, sizeof(double) * m, cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
     assert(0 == info_gpu);
-    if (d_work) CHECK_CUDA(cudaFree(d_work));
-    d_work = nullptr;
 }
 
 void Diag_Cusolver_gvd::solve_complex(
@@ -96,17 +102,18 @@ void Diag_Cusolver_gvd::solve_complex(
     }
     CHECK_CUDA(cudaMemcpy(d_A2, A, sizeof(cuDoubleComplex) * lda * m, input_copy));
     CHECK_CUDA(cudaMemcpy(d_B2, B, sizeof(cuDoubleComplex) * lda * m, input_copy));
-    CHECK_CUSOLVER(cusolverDnZhegvd_bufferSize(
-        cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, &lwork));
-    CHECK_CUDA(cudaMalloc((void**)&d_work2, sizeof(cuDoubleComplex) * lwork));
+    if (d_work2 == nullptr)
+    {
+        CHECK_CUSOLVER(cusolverDnZhegvd_bufferSize(
+            cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, &lwork));
+        CHECK_CUDA(cudaMalloc((void**)&d_work2, sizeof(cuDoubleComplex) * lwork));
+    }
     CHECK_CUSOLVER(cusolverDnZhegvd(
         cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, d_work2, lwork, devInfo));
     CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaMemcpy(W, d_W, sizeof(double) * m, cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
     assert(0 == info_gpu);
-    if (d_work2) CHECK_CUDA(cudaFree(d_work2));
-    d_work2 = nullptr;
 }
 
 void Diag_Cusolver_gvd::Dngvd_double(int N, int M, double* A, double* B, double* W, double* V)

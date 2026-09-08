@@ -59,6 +59,9 @@ class Veff<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
      * grid integration is used to calculate the contribution Hamiltonian of effective potential
      */
     virtual void contributeHR() override;
+    void contributeHRDevice() override;
+    bool supportsDeviceHR() const override;
+    const TR* deviceHRContribution() const override { return device_hr_; }
 
     // per-atom-I derivative d<phi|V|phi>/dtau_I; one HContainer per atom I (size nat each).
     // Includes the Pulay term (-<grad phi|V|phi>) for all types, plus the Hellmann-Feynman
@@ -81,6 +84,7 @@ private:
   elecstate::Potential* pot = nullptr;
 
   int nspin = 1;
+  const TR* device_hr_ = nullptr;
 
   /**
    * @brief initialize HR, search the nearest neighbor atoms

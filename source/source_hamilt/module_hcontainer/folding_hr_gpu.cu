@@ -49,8 +49,14 @@ struct Pair
     int phases;
 };
 
-__global__ void fold_pairs(const Pair* pairs, const int2* tiles, const double2* values,
-                           const double2* phases, double2* out, int ld)
+__global__ void fold_pairs(const Pair* pairs,
+                           const int2* tiles,
+                           const double2* values,
+                           const double2* first,
+                           const double2* second,
+                           const double2* phases,
+                           double2* out,
+                           int ld)
 {
     const int2 tile = tiles[blockIdx.x];
     const Pair p = pairs[tile.x];
@@ -60,7 +66,19 @@ __global__ void fold_pairs(const Pair* pairs, const int2* tiles, const double2* 
     double im = 0.0;
     for (int ir = 0; ir < p.nr; ++ir)
     {
-        const double2 v = values[p.values + ir * p.rows * p.cols + i];
+        double2 v = values[p.values + ir * p.rows * p.cols + i];
+        if (first != nullptr)
+        {
+            const double2 a = first[p.values + ir * p.rows * p.cols + i];
+            v.x = __dadd_rn(v.x, a.x);
+            v.y = __dadd_rn(v.y, a.y);
+        }
+        if (second != nullptr)
+        {
+            const double2 a = second[p.values + ir * p.rows * p.cols + i];
+            v.x = __dadd_rn(v.x, a.x);
+            v.y = __dadd_rn(v.y, a.y);
+        }
         const double2 z = phases[p.phases + ir];
         // Preserve the CPU complex multiply/add order, without contraction.
         re = __dadd_rn(re, __dsub_rn(__dmul_rn(z.x, v.x), __dmul_rn(z.y, v.y)));
@@ -178,13 +196,67 @@ void FoldingHrGpu::upload(const HContainer<std::complex<double>>& hr)
 
 std::complex<double>* FoldingHrGpu::fold(int ik)
 {
+    return fold_device(ik,
+                       reinterpret_cast<const std::complex<double>*>(impl_->values->device),
+                       impl_->nvalues);
+}
+
+std::complex<double>* FoldingHrGpu::fold_device(int ik,
+                                                const std::complex<double>* values,
+                                                size_t count)
+{
+    return fold_impl(ik, values, nullptr, nullptr, count);
+}
+
+std::complex<double>* FoldingHrGpu::fold_with_device_addend(
+    int ik,
+    const std::complex<double>* addend,
+    size_t count)
+{
+    if (count && addend == nullptr) throw std::invalid_argument("GPU folding device addend is null");
+    return fold_impl(ik,
+                     reinterpret_cast<const std::complex<double>*>(impl_->values->device),
+                     addend,
+                     nullptr,
+                     count);
+}
+
+std::complex<double>* FoldingHrGpu::fold_with_device_addends(
+    int ik,
+    const std::complex<double>* first,
+    const std::complex<double>* second,
+    size_t count)
+{
+    if (count && (first == nullptr || second == nullptr))
+    {
+        throw std::invalid_argument("GPU folding device addend is null");
+    }
+    return fold_impl(ik,
+                     reinterpret_cast<const std::complex<double>*>(impl_->values->device),
+                     first,
+                     second,
+                     count);
+}
+
+std::complex<double>* FoldingHrGpu::fold_impl(int ik,
+                                              const std::complex<double>* values,
+                                              const std::complex<double>* first,
+                                              const std::complex<double>* second,
+                                              size_t count)
+{
     auto& p = *impl_;
     if (ik < 0 || ik >= p.nk) throw std::out_of_range("GPU folding k index");
+    if (count != p.nvalues) throw std::invalid_argument("GPU folding value count changed");
+    if (count && values == nullptr) throw std::invalid_argument("GPU folding device values are null");
     ModuleBase::timer::start("FoldingHrGpu", "fold");
     CHECK_CUDA(cudaMemset(p.output->device, 0, size_t(p.rows) * p.cols * sizeof(double2)));
     if (p.ntiles)
     {
-        fold_pairs<<<p.ntiles, 256>>>(p.device_pairs->device, p.tiles->device, p.values->device,
+        fold_pairs<<<p.ntiles, 256>>>(p.device_pairs->device,
+                                    p.tiles->device,
+                                    reinterpret_cast<const double2*>(values),
+                                    reinterpret_cast<const double2*>(first),
+                                    reinterpret_cast<const double2*>(second),
                                     p.phases->device + ik * p.lattice.size(), p.output->device, p.rows);
         CHECK_CUDA(cudaGetLastError());
     }

@@ -50,6 +50,11 @@ class OperatorLCAO : public Operator<TK> {
      */
     virtual void contributeHR() { return; }
 
+    /// Build a dynamic H(R) contribution without materializing it on the host.
+    virtual void contributeHRDevice() { this->contributeHR(); }
+    virtual bool supportsDeviceHR() const { return false; }
+    virtual const TR* deviceHRContribution() const { return nullptr; }
+
     /* Function matrixHk() is used for get information of HK matrix and SK matrix for diagolization.
     Gamma_only case (TK = double), SK would not changed during one SCF loop, a template triangle matrix SK_temp is used
     for accelerating. General case (TK = std::complex<double>), only pointers of HK and SK saved in OperatorLCAO

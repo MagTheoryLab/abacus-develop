@@ -221,8 +221,11 @@ bool SpinorHrGpu::matches(const hamilt::HContainer<std::complex<double>>& destin
         && impl_->cols == destination.get_paraV()->get_indexes_col();
 }
 
-void SpinorHrGpu::transfer(const double* v0, const double* vx, const double* vy, const double* vz,
-                          bool transverse, hamilt::HContainer<std::complex<double>>& destination)
+const std::complex<double>* SpinorHrGpu::transfer_device(const double* v0,
+                                                        const double* vx,
+                                                        const double* vy,
+                                                        const double* vz,
+                                                        bool transverse)
 {
     auto& p = *impl_;
     ModuleBase::timer::start("Gint", "spinor_owner_values");
@@ -249,11 +252,22 @@ void SpinorHrGpu::transfer(const double* v0, const double* vx, const double* vy,
         sum_owned<<<(p.nnr + 255) / 256, 256>>>(p.nnr, p.starts->get_device_ptr(), p.indices->get_device_ptr(),
                                               p.recv->get_device_ptr(), p.owned->get_device_ptr());
         CHECK_CUDA(cudaGetLastError());
-        // Current downstream H(R) consumers are host-side. This is the single
-        // rank-owned materialization boundary, not four grid-local Pauli copies.
-        CHECK_CUDA(cudaMemcpy(destination.get_wrapper(), p.owned->get_device_ptr(),
-                               p.nnr * sizeof(double2), cudaMemcpyDeviceToHost));
     }
     ModuleBase::timer::end("Gint", "spinor_owner_values");
+    return reinterpret_cast<const std::complex<double>*>(p.owned->get_device_ptr());
+}
+
+void SpinorHrGpu::transfer(const double* v0, const double* vx, const double* vy, const double* vz,
+                          bool transverse, hamilt::HContainer<std::complex<double>>& destination)
+{
+    const std::complex<double>* device_values = transfer_device(v0, vx, vy, vz, transverse);
+    const size_t count = impl_->nnr;
+    if (count)
+    {
+        // Current downstream H(R) consumers are host-side. This is the single
+        // rank-owned materialization boundary, not four grid-local Pauli copies.
+        CHECK_CUDA(cudaMemcpy(destination.get_wrapper(), device_values,
+                              count * sizeof(std::complex<double>), cudaMemcpyDeviceToHost));
+    }
 }
 }

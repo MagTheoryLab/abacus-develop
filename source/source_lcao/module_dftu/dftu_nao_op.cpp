@@ -187,7 +187,7 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::cal_nlm_all(const Parallel_Orbi
 }
 
 template <typename TK, typename TR>
-bool hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contribute_hr_gpu(const Parallel_Orbitals*)
+bool hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contribute_hr_gpu(const Parallel_Orbitals*, bool)
 {
     return false;
 }
@@ -195,7 +195,8 @@ bool hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contribute_hr_gpu(const Paralle
 #ifdef __CUDA
 template <>
 bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>::contribute_hr_gpu(
-    const Parallel_Orbitals* pv)
+    const Parallel_Orbitals* pv,
+    bool keep_device)
 {
     if (!this->use_gpu_ || this->nspin != 4)
     {
@@ -397,9 +398,14 @@ bool hamilt::DFTU<hamilt::OperatorLCAO<std::complex<double>, std::complex<double
         std::copy(onsite_spinor.begin(), onsite_spinor.end(), onsite.begin() + offset);
     }
 
-    hamilt::dftu_gpu::add_hubbard_hamiltonian(this->gpu_cache_,
-                                               onsite.data(),
-                                               this->hR->get_wrapper());
+    if (keep_device)
+    {
+        this->device_hr_ = hamilt::dftu_gpu::build_hubbard_hamiltonian(this->gpu_cache_, onsite.data());
+    }
+    else
+    {
+        hamilt::dftu_gpu::add_hubbard_hamiltonian(this->gpu_cache_, onsite.data(), this->hR->get_wrapper());
+    }
     return true;
 }
 #endif
@@ -474,7 +480,20 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::finish_hr_contribution()
 template <typename TK, typename TR>
 void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
 {
+    this->contribute_hr_impl(false);
+}
+
+template <typename TK, typename TR>
+void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHRDevice()
+{
+    this->contribute_hr_impl(true);
+}
+
+template <typename TK, typename TR>
+void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contribute_hr_impl(bool keep_device)
+{
     ModuleBase::TITLE("DFTU", "contributeHR");
+    this->device_hr_ = nullptr;
     // Early exit conditions:
     // - get_dmr(0) == nullptr: DMR not available (typical in first iteration without file input)
     // - !is_occ_mat_initialized(): occ_mat not read from file AND not yet computed from DMR
@@ -504,7 +523,7 @@ void hamilt::DFTU<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
     //    This is reused in both occ and HR calculations
     this->cal_nlm_all(pv);
 
-    if (this->contribute_hr_gpu(pv))
+    if (this->contribute_hr_gpu(pv, keep_device))
     {
         this->finish_hr_contribution();
         ModuleBase::timer::end("DFTU", "contributeHR");

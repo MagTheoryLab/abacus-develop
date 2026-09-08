@@ -22,6 +22,7 @@ AddTest(
   LIBS parameter psi base device CUDA::cudart
   KEEP_FEATURE_DEFINITIONS __CUDA __MPI
   SOURCES test_spinor_hr_gpu.cpp ../../module_gint/kernel/spinor_hr_gpu.cu
+    ../folding_hr_gpu.cu ../func_folding.cpp
     ../base_matrix.cpp ../hcontainer.cpp ../atom_pair.cpp
     ../../../source_basis/module_ao/parallel_orbitals.cpp tmp_mocks.cpp
 )

@@ -21,6 +21,23 @@ void Gint_vl_nspin4_gpu::cal_gint()
     ModuleBase::timer::end("Gint", "cal_gint_vl");
 }
 
+const std::complex<double>* Gint_vl_nspin4_gpu::cal_gint_device()
+{
+    ModuleBase::TITLE("Gint", "cal_gint_vl");
+    ModuleBase::timer::start("Gint", "cal_gint_vl");
+    init_hr_gint_();
+    cal_hr_gint_();
+    auto& transfer = gint_info_->spinor_hr_transfer(hr_gint_part_[0], *hR_);
+    const std::complex<double>* result
+        = transfer.transfer_device(hr_gint_part_d_[0].get_device_ptr(),
+                                   hr_gint_part_d_[1].get_device_ptr(),
+                                   hr_gint_part_d_[2].get_device_ptr(),
+                                   hr_gint_part_d_[3].get_device_ptr(),
+                                   transverse_);
+    ModuleBase::timer::end("Gint", "cal_gint_vl");
+    return result;
+}
+
 void Gint_vl_nspin4_gpu::init_hr_gint_()
 {
     hr_gint_part_.resize(nspin_);

@@ -19,6 +19,12 @@ void cal_gint_vl(
     std::vector<const double*> vr_eff,
     HContainer<std::complex<double>>* hR);
 
+#ifdef __CUDA
+const std::complex<double>* cal_gint_vl_device(
+    std::vector<const double*> vr_eff,
+    HContainer<std::complex<double>>* hR);
+#endif
+
 void cal_gint_vl_metagga(
     const double* vr_eff,
     const double* vfork,

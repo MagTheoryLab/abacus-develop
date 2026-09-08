@@ -30,9 +30,10 @@ namespace
 {
 // Share device selection for the two spinor-potential entry points. An empty
 // kinetic potential denotes ordinary LDA/GGA; public interfaces stay unchanged.
-void cal_spinor_potential(std::vector<const double*> vr_eff,
-                          std::vector<const double*> vofk,
-                          HContainer<std::complex<double>>* hR)
+const std::complex<double>* cal_spinor_potential(std::vector<const double*> vr_eff,
+                                                 std::vector<const double*> vofk,
+                                                 HContainer<std::complex<double>>* hR,
+                                                 const bool keep_device)
 {
 #ifdef __CUDA
     if (PARAM.inp.device == "gpu")
@@ -40,6 +41,10 @@ void cal_spinor_potential(std::vector<const double*> vr_eff,
         if (vofk.empty())
         {
             Gint_vl_nspin4_gpu operation(vr_eff, hR, PARAM.globalv.domag);
+            if (keep_device)
+            {
+                return operation.cal_gint_device();
+            }
             operation.cal_gint();
         }
         else
@@ -47,7 +52,7 @@ void cal_spinor_potential(std::vector<const double*> vr_eff,
             Gint_vl_metagga_nspin4_gpu operation(vr_eff, vofk, hR);
             operation.cal_gint();
         }
-        return;
+        return nullptr;
     }
 #endif
     if (vofk.empty())
@@ -60,6 +65,7 @@ void cal_spinor_potential(std::vector<const double*> vr_eff,
         Gint_vl_metagga_nspin4 operation(vr_eff, vofk, hR);
         operation.cal_gint();
     }
+    return nullptr;
 }
 }
 
@@ -85,8 +91,17 @@ void cal_gint_vl(
     std::vector<const double*> vr_eff,
     HContainer<std::complex<double>>* hR)
 {
-    cal_spinor_potential(vr_eff, {}, hR);
+    cal_spinor_potential(vr_eff, {}, hR, false);
 }
+
+#ifdef __CUDA
+const std::complex<double>* cal_gint_vl_device(
+    std::vector<const double*> vr_eff,
+    HContainer<std::complex<double>>* hR)
+{
+    return cal_spinor_potential(vr_eff, {}, hR, true);
+}
+#endif
 
 void cal_gint_vl_metagga(
     const double* vr_eff,
@@ -112,7 +127,7 @@ void cal_gint_vl_metagga(
     std::vector<const double*> vofk,
     HContainer<std::complex<double>>* hR)
 {
-    cal_spinor_potential(vr_eff, vofk, hR);
+    cal_spinor_potential(vr_eff, vofk, hR, false);
 }
 
 void cal_gint_rho(

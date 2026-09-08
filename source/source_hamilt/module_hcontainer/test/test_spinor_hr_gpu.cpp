@@ -1,8 +1,10 @@
 #include "gtest/gtest.h"
 #include "source_hamilt/module_gint/kernel/spinor_hr_gpu.h"
 #include "source_hamilt/module_gint/kernel/cuda_mem_wrapper.h"
+#include "source_hamilt/module_hcontainer/folding_hr_gpu.h"
 #include "source_hamilt/module_hcontainer/hcontainer.h"
 #include "source_base/parallel_global.h"
+#include <vector>
 
 namespace
 {
@@ -110,6 +112,103 @@ TEST(SpinorHrGpu, DistributedPauliOracleAndReuse)
                 }
             }
         }
+    }
+}
+
+TEST(SpinorHrGpu, DeviceResidentFoldingMatchesHostBoundary)
+{
+    int device_count = 0;
+    CHECK_CUDA(cudaGetDeviceCount(&device_count));
+    ASSERT_GT(device_count, 0);
+    CHECK_CUDA(cudaSetDevice(test_rank % device_count));
+    const int trace[] = {0, 6};
+    Parallel_Orbitals pv;
+    pv.init(12, 12, 2, MPI_COMM_WORLD);
+    pv.set_atomic_trace(trace, 2, 12);
+    hamilt::HContainer<double> source(2);
+    hamilt::HContainer<std::complex<double>> destination(&pv);
+    for (int a = 0; a < 2; ++a)
+    {
+        for (int b = 0; b < 2; ++b)
+        {
+            hamilt::AtomPair<double> pair(a, b);
+            pair.set_size(3, 3);
+            pair.get_HR_values(0, 0, 0);
+            pair.get_HR_values(1, -1, 2);
+            if ((test_rank + a + b) % 2 == 0) source.insert_pair(pair);
+            if (!pv.is_invalid_atom_pair(a, b))
+            {
+                hamilt::AtomPair<std::complex<double>> target(a, b, &pv);
+                target.get_HR_values(0, 0, 0);
+                target.get_HR_values(1, -1, 2);
+                destination.insert_pair(target);
+            }
+        }
+    }
+    source.allocate(nullptr, true);
+    destination.allocate(nullptr, true);
+    CudaMemWrapper<double> channels[4];
+    for (int spin = 0; spin < 4; ++spin)
+    {
+        channels[spin] = CudaMemWrapper<double>(source.get_nnr(), 0, true);
+        for (size_t index = 0; index < source.get_nnr(); ++index)
+        {
+            channels[spin].get_host_ptr()[index]
+                = (test_rank + 1) * (0.25 + spin + 0.001 * index);
+        }
+        channels[spin].copy_host_to_device_sync();
+    }
+    const std::vector<ModuleBase::Vector3<double>> kpoints = {{0.17, -0.23, 0.31}};
+    ModuleGint::SpinorHrGpu spinor(source, destination);
+    hamilt::FoldingHrGpu folding(destination, kpoints);
+    spinor.transfer(channels[0].get_device_ptr(),
+                    channels[1].get_device_ptr(),
+                    channels[2].get_device_ptr(),
+                    channels[3].get_device_ptr(),
+                    true,
+                    destination);
+    std::vector<std::complex<double>> gint_host(destination.get_wrapper(),
+                                                destination.get_wrapper() + destination.get_nnr());
+    for (size_t index = 0; index < destination.get_nnr(); ++index)
+    {
+        destination.get_wrapper()[index] += std::complex<double>(0.007 * index, -0.003 * index);
+    }
+    CudaMemWrapper<std::complex<double>> second(destination.get_nnr(), 0, true);
+    for (size_t index = 0; index < destination.get_nnr(); ++index)
+    {
+        second.get_host_ptr()[index] = std::complex<double>(0.002 * index, 0.004 * index);
+        destination.get_wrapper()[index] += second.get_host_ptr()[index];
+    }
+    second.copy_host_to_device_sync();
+    folding.upload(destination);
+    std::vector<std::complex<double>> host_boundary(pv.get_local_size());
+    CHECK_CUDA(cudaMemcpy(host_boundary.data(),
+                          folding.fold(0),
+                          host_boundary.size() * sizeof(host_boundary[0]),
+                          cudaMemcpyDeviceToHost));
+    const std::complex<double>* device_values
+        = spinor.transfer_device(channels[0].get_device_ptr(),
+                                 channels[1].get_device_ptr(),
+                                 channels[2].get_device_ptr(),
+                                 channels[3].get_device_ptr(),
+                                 true);
+    for (size_t index = 0; index < destination.get_nnr(); ++index)
+    {
+        destination.get_wrapper()[index] -= gint_host[index] + second.get_host_ptr()[index];
+    }
+    folding.upload(destination);
+    std::vector<std::complex<double>> device_resident(pv.get_local_size());
+    CHECK_CUDA(cudaMemcpy(device_resident.data(),
+                          folding.fold_with_device_addends(0,
+                                                           device_values,
+                                                           second.get_device_ptr(),
+                                                           destination.get_nnr()),
+                          device_resident.size() * sizeof(device_resident[0]),
+                          cudaMemcpyDeviceToHost));
+    ASSERT_EQ(host_boundary.size(), device_resident.size());
+    for (size_t index = 0; index < host_boundary.size(); ++index)
+    {
+        EXPECT_NEAR(std::abs(host_boundary[index] - device_resident[index]), 0.0, 1e-12);
     }
 }
 

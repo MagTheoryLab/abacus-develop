@@ -54,6 +54,9 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
      * <phi_{\mu, 0}|beta_p1>D_{p1, p2}<beta_p2|phi_{\nu, R}>
      */
     virtual void contributeHR() override;
+    void contributeHRDevice() override;
+    bool supportsDeviceHR() const override { return use_gpu_ && nspin == 4; }
+    const TR* deviceHRContribution() const override { return device_hr_; }
 
     /// calculate force and stress for DFT+U
     void cal_force_stress(const bool cal_force,
@@ -127,7 +130,8 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                     TR* data_pointer);
 
     /// GPU fast path for the non-collinear single-rank occupation and HR contractions.
-    bool contribute_hr_gpu(const Parallel_Orbitals* pv);
+    bool contribute_hr_gpu(const Parallel_Orbitals* pv, bool keep_device);
+    void contribute_hr_impl(bool keep_device);
 
     /// Apply the spin-cycle bookkeeping shared by CPU and GPU HR contributions.
     void finish_hr_contribution();
@@ -167,6 +171,7 @@ class DFTU<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
     std::vector<std::vector<std::unordered_map<int, std::vector<double>>>> nlm_tot;
 
     void* gpu_cache_ = nullptr;
+    const TR* device_hr_ = nullptr;
 };
 
 } // namespace hamilt

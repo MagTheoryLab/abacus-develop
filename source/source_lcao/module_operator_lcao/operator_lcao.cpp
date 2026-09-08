@@ -138,7 +138,8 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
                     // update HR first
                     // in cal_type=lcao_gint, HR should be updated by every
                     // sub-node.
-                    last->contributeHR();
+                    if (fold_k) last->contributeHR();
+                    else last->contributeHRDevice();
 
                     // update HK next
                     // in cal_type=lcao_gint, HK will update in the last node with
@@ -169,8 +170,8 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
             //in cal_type=lcao_dftu, HK only need to update from one node
             if(!this->hr_done)
             {
-                //in cal_type=lcao_deepks, HR should be updated
-                this->contributeHR();
+                if (fold_k) this->contributeHR();
+                else this->contributeHRDevice();
             }
             break;
         }

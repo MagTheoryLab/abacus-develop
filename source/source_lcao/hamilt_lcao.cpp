@@ -80,25 +80,57 @@ bool HamiltLCAO<std::complex<double>, std::complex<double>>::updateHk_device(
         {
             return false;
         }
+        const auto* lcao_op
+            = dynamic_cast<const OperatorLCAO<std::complex<double>, std::complex<double>>*>(op);
+        if (lcao_op != nullptr
+            && (op->get_cal_type() == calculation_type::lcao_gint
+                || op->get_cal_type() == calculation_type::lcao_dftu)
+            && !lcao_op->supportsDeviceHR())
+        {
+            return false;
+        }
+        if (op->get_cal_type() == calculation_type::lcao_sc_lambda
+            || op->get_cal_type() == calculation_type::lcao_exx)
+        {
+            return false;
+        }
     }
     this->updateHk_impl(ik, false);
     if (!this->h_fold_)
     {
         this->h_fold_.reset(new FoldingHrGpu(*this->hR, this->kv->kvec_d));
         this->h_fold_->upload(*this->hR);
-        this->gpu_hr_revision_ = this->hr_revision_;
-    }
-    else if (this->gpu_hr_revision_ != this->hr_revision_)
-    {
-        this->h_fold_->upload(*this->hR);
-        this->gpu_hr_revision_ = this->hr_revision_;
     }
     if (!this->s_fold_)
     {
         this->s_fold_.reset(new FoldingHrGpu(*this->sR, this->kv->kvec_d));
         this->s_fold_->upload(*this->sR);
     }
-    h = this->h_fold_->fold(ik);
+    const std::complex<double>* addends[2] = {nullptr, nullptr};
+    int addend_count = 0;
+    for (auto* op = this->ops; op != nullptr; op = op->next_op)
+    {
+        const auto* lcao_op
+            = dynamic_cast<const OperatorLCAO<std::complex<double>, std::complex<double>>*>(op);
+        if (lcao_op != nullptr && lcao_op->deviceHRContribution() != nullptr)
+        {
+            if (addend_count == 2)
+            {
+                ModuleBase::WARNING_QUIT("HamiltLCAO::updateHk_device",
+                                         "more than two device H(R) addends are not supported");
+            }
+            addends[addend_count++] = lcao_op->deviceHRContribution();
+        }
+    }
+    if (addend_count == 0) h = this->h_fold_->fold(ik);
+    else if (addend_count == 1)
+    {
+        h = this->h_fold_->fold_with_device_addend(ik, addends[0], this->hR->get_nnr());
+    }
+    else
+    {
+        h = this->h_fold_->fold_with_device_addends(ik, addends[0], addends[1], this->hR->get_nnr());
+    }
     s = this->s_fold_->fold(ik);
     return true;
 }
@@ -571,10 +603,7 @@ void HamiltLCAO<TK, TR>::updateHk_impl(const int ik, const bool fold_k)
         this->current_spin = this->kv->isk[ik];
         dynamic_cast<hamilt::OperatorLCAO<TK, TR>*>(this->ops)->set_current_spin(this->kv->isk[ik]);
     }
-    if (dynamic_cast<OperatorLCAO<TK, TR>*>(this->getOperator())->init(ik, fold_k))
-    {
-        ++this->hr_revision_;
-    }
+    dynamic_cast<OperatorLCAO<TK, TR>*>(this->getOperator())->init(ik, fold_k);
     ModuleBase::timer::end("HamiltLCAO", "updateHk");
 }
 

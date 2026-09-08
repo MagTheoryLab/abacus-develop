@@ -162,6 +162,7 @@ void Veff<OperatorLCAO<std::complex<double>, double>>::contributeHR()
 template<>
 void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeHR()
 {
+    this->device_hr_ = nullptr;
     ModuleBase::TITLE("Veff", "contributeHR");
     ModuleBase::timer::start("Veff", "contributeHR");
 
@@ -209,6 +210,47 @@ void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeH
     ModuleBase::timer::end("Veff", "contributeHR");
     return;
 }
+
+template <typename TK, typename TR>
+void Veff<OperatorLCAO<TK, TR>>::contributeHRDevice()
+{
+    this->contributeHR();
+}
+
+template <typename TK, typename TR>
+bool Veff<OperatorLCAO<TK, TR>>::supportsDeviceHR() const
+{
+    return false;
+}
+
+#ifdef __CUDA
+template <>
+void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeHRDevice()
+{
+    ModuleBase::TITLE("Veff", "contributeHRDevice");
+    ModuleBase::timer::start("Veff", "contributeHRDevice");
+    this->device_hr_ = nullptr;
+    if (this->nspin != 4 || XC_Functional::get_ked_flag())
+    {
+        ModuleBase::timer::end("Veff", "contributeHRDevice");
+        this->contributeHR();
+        return;
+    }
+    std::vector<const double*> vr_eff(4, nullptr);
+    for (int is = 0; is < 4; ++is)
+    {
+        vr_eff[is] = this->pot->get_eff_v(is);
+    }
+    this->device_hr_ = ModuleGint::cal_gint_vl_device(vr_eff, this->hR);
+    ModuleBase::timer::end("Veff", "contributeHRDevice");
+}
+
+template <>
+bool Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::supportsDeviceHR() const
+{
+    return this->nspin == 4 && !XC_Functional::get_ked_flag();
+}
+#endif
 
 // definition of class template should in the end of file to avoid compiling warning 
 template class Veff<OperatorLCAO<double, double>>;

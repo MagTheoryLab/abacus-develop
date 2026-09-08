@@ -20,6 +20,7 @@ class Gint_vl_nspin4_gpu : public Gint
         : vr_eff_(vr_eff), hR_(hR), dr3_(gint_info_->get_mgrid_volume()), transverse_(transverse) {}
     
     void cal_gint();
+    const std::complex<double>* cal_gint_device();
 
     private:
 

@@ -199,6 +199,28 @@ void add_hubbard_hamiltonian(void* opaque_cache,
                           cudaMemcpyDeviceToHost));
 }
 
+const std::complex<double>* build_hubbard_hamiltonian(
+    void* opaque_cache,
+    const std::complex<double>* onsite)
+{
+    Cache* cache = static_cast<Cache*>(opaque_cache);
+    CHECK_CUDA(cudaMemcpy(cache->onsite,
+                          onsite,
+                          cache->onsite_size * sizeof(thrust::complex<double>),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemset(cache->hr, 0, cache->hr_size * sizeof(thrust::complex<double>)));
+    if (cache->task_count > 0)
+    {
+        hamiltonian_kernel<<<cache->task_count, 256>>>(cache->projections,
+                                                       cache->tasks,
+                                                       cache->task_count,
+                                                       cache->onsite,
+                                                       cache->hr);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    return reinterpret_cast<const std::complex<double>*>(cache->hr);
+}
+
 void destroy_cache(void* opaque_cache)
 {
     Cache* cache = static_cast<Cache*>(opaque_cache);

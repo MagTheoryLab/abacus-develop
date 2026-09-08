@@ -40,6 +40,10 @@ void add_hubbard_hamiltonian(void* cache,
                             const std::complex<double>* onsite,
                             std::complex<double>* hr);
 
+const std::complex<double>* build_hubbard_hamiltonian(
+    void* cache,
+    const std::complex<double>* onsite);
+
 void destroy_cache(void* cache);
 
 } // namespace dftu_gpu

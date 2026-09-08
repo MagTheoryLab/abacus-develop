@@ -1,4 +1,5 @@
 #include "../dftu_lcao_gpu.h"
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <complex>
 #include <vector>
@@ -104,11 +105,20 @@ TEST(DFTULcaoGPU, DistributedBlocksMatchScalar)
             std::vector<double> partial(expected.size());
             hamilt::dftu_gpu::compute_occupations(cache, local_dm.data(), partial.data());
             hamilt::dftu_gpu::add_hubbard_hamiltonian(cache, potential.data(), hr.data());
+            const auto* device_addend = hamilt::dftu_gpu::build_hubbard_hamiltonian(cache, potential.data());
+            std::vector<std::complex<double>> addend(hr.size());
+            ASSERT_EQ(cudaMemcpy(addend.data(),
+                                 device_addend,
+                                 addend.size() * sizeof(std::complex<double>),
+                                 cudaMemcpyDeviceToHost),
+                      cudaSuccess);
             for (std::size_t i = 0; i < partial.size(); ++i) { actual[i] += partial[i]; }
             for (std::size_t i = 0; i < hr.size(); ++i)
             {
                 EXPECT_NEAR(hr[i].real(), expected_hr[i].real(), 1e-10);
                 EXPECT_NEAR(hr[i].imag(), expected_hr[i].imag(), 1e-10);
+                EXPECT_NEAR(addend[i].real(), expected_hr[i].real() - 0.25, 1e-10);
+                EXPECT_NEAR(addend[i].imag(), expected_hr[i].imag() + 0.1, 1e-10);
             }
             hamilt::dftu_gpu::destroy_cache(cache);
         }

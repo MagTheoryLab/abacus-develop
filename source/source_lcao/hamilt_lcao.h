@@ -162,12 +162,10 @@ class HamiltLCAO : public Hamilt<TK>
   private:
 
     void updateHk_impl(int ik, bool fold_k);
-    std::size_t hr_revision_ = 0;
 #ifdef __CUDA
     // Geometry-owned metadata; numerical H(R) validity is tracked separately.
     std::unique_ptr<FoldingHrGpu> h_fold_;
     std::unique_ptr<FoldingHrGpu> s_fold_;
-    std::size_t gpu_hr_revision_ = 0;
 #endif
 
     const K_Vectors* kv = nullptr;

@@ -1,7 +1,11 @@
 name: Atomic Simulation Environment (ASE) Plugin Test
 
 on:
-  pull_request:
+  push:
+    branches: [codex/ci-ase-reproduce]
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -9,7 +13,15 @@ defaults:
 
 jobs:
   test:
-    name: abacuslite
+    name: abacuslite (${{ matrix.variant }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: upstream-base
+            revision: 4c9547460c2b25855b3c78900dfc1ecca0c8f40d
+          - variant: pr7923-merge
+            revision: eb0a5be9e2f439a2d1c04245db90803e05cc2901
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/deepmodeling/abacus-gnu
@@ -17,6 +29,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ matrix.revision }}
 
       - name: Set up Miniconda
         uses: conda-incubator/setup-miniconda@v4

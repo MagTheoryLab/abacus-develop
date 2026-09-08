@@ -1,7 +1,8 @@
-name: Integration Test and Unit Test
+name: NCGGA LibXC compatibility reproduction
 
 on:
-  pull_request:
+  push:
+    branches: [codex/ci-ncgga-libxc]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,12 +15,9 @@ defaults:
 jobs:
   test:
     name: Test
-    runs-on: X64
-    if: github.repository_owner == 'deepmodeling'
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/deepmodeling/abacus-gnu
-      volumes:
-        - /tmp/ccache:/github/home/.ccache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -81,231 +79,25 @@ jobs:
 #        continue-on-error: true
 #      - uses: pre-commit-ci/lite-action@v1.0.3
 
-      - name: Build
-        run: |
-          cmake --build build -j8
-          cmake --install build
-
-      - name: Check documentation consistency
-        run: |
-          ABACUS_BIN=$(find build -name "abacus_*" -type f -executable | head -1)
-          echo "Using binary: ${ABACUS_BIN}"
-
-          # Check 1: parameters.yaml matches C++ Input_Item definitions
-          ${ABACUS_BIN} --generate-parameters-yaml > /tmp/parameters_generated.yaml
-          if ! diff -q docs/parameters.yaml /tmp/parameters_generated.yaml; then
-            echo "error: docs/parameters.yaml is out of sync with C++ source"
-            echo "Fix: ${ABACUS_BIN} --generate-parameters-yaml > docs/parameters.yaml"
-            diff docs/parameters.yaml /tmp/parameters_generated.yaml || true
-            exit 1
-          fi
-          echo "  parameters.yaml: OK"
-
-          # Check 2: input-main.md matches regenerated markdown
-          pip install -q pyyaml
-          python docs/generate_input_main.py \
-            /tmp/parameters_generated.yaml \
-            --output /tmp/input-main-generated.md
-          if ! diff -q docs/advanced/input_files/input-main.md /tmp/input-main-generated.md; then
-            echo "error: input-main.md is out of sync"
-            echo "Fix: python docs/generate_input_main.py docs/parameters.yaml"
-            diff docs/advanced/input_files/input-main.md /tmp/input-main-generated.md || true
-            exit 1
-          fi
-          echo "  input-main.md: OK"
-
-      - name: Integrated Tests Preparation
+      - name: Build corrected tests
+        run: cmake --build build -j2 --target MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+      - name: Run corrected serial and MPI2 tests
         env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R integrated_test
-
-      - name: Module_Base Unittests
+          OMP_NUM_THREADS: 1
+          OMPI_ALLOW_RUN_AS_ROOT: 1
+          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+        run: ctest --test-dir build -V -R '^MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD(_MPI2)?$'
+      - name: Reproduce original zero-omega failure
         env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
+          OMP_NUM_THREADS: 1
         run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_BASE
-
-      - name: Module_IO Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_IO
-
-      - name: Module_HSolver Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_HSOLVER -E PERF_MODULE_HSOLVER_KERNELS
-
-      - name: Module_Cell Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_CELL
-
-      - name: Module_MD Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_MD
-
-      - name: Module_Psi Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_PSI
-
-      - name: Module_RI Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_RI
-
-      - name: Module_Estate Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_ESTATE
-
-      - name: Module_Hamilt Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_HAMILT
-
-      - name: Module_PW Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_PW
-
-      - name: Module_LCAO Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_LCAO
-
-      - name: Module_AO Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_AO
-
-      - name: Module_NAO Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_NAO
-
-      - name: Module_RELAX Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_RELAX
-
-      - name: Module_LR Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R MODULE_LR
-
-      - name: 01_PW Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 01_PW
-
-      - name: 02_NAO_Gamma Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 02_NAO_Gamma
-
-      - name: 03_NAO_multik Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 03_NAO_multik
-
-      - name: 04_FF Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 04_FF
-
-      - name: 05_rtTDDFT Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 05_rtTDDFT
-
-      - name: 06_SDFT Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 06_SDFT
-
-      - name: 07_OFDFT Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 07_OFDFT
-
-      - name: 08_EXX Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 08_EXX
-
-      - name: 09_DeePKS Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 09_DeePKS
-
-      - name: 10_others Test
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -R 10_others
-
-#      - name: 17_DS_DFTU Test
-#        env:
-#          GTEST_COLOR: 'yes'
-#          OMP_NUM_THREADS: '2'
-#        run: |
-#          ctest --test-dir build -V --timeout 1700 -R 17_DS_DFTU
-
-      - name: Other Unittests
-        env:
-          GTEST_COLOR: 'yes'
-          OMP_NUM_THREADS: '2'
-        run: |
-          ctest --test-dir build -V --timeout 1700 -E 'integrate_test|01_PW|02_NAO_Gamma|03_NAO_multik|04_FF|05_rtTDDFT|06_SDFT|07_OFDFT|08_EXX|09_DeePKS|10_others|11_PW_GPU|12_NAO_Gamma_GPU|13_NAO_multik_GPU|15_rtTDDFT_GPU|16_SDFT_GPU|17_DS_DFTU|MODULE_BASE|MODULE_IO|MODULE_HSOLVER|MODULE_CELL|MODULE_MD|MODULE_PSI|MODULE_ESTATE|MODULE_RI|MODULE_HAMILT|MODULE_PW|MODULE_LCAO|MODULE_AO|MODULE_NAO|MODULE_RELAX|MODULE_LR'
+          sed -i 's/test_hse_omega = 0.11/test_hse_omega = 0.0/' source/source_hamilt/module_xc/test/test_xc_functional_ncgga_sf.cpp
+          cmake --build build -j2 --target MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+          set +e
+          ctest --test-dir build -V -R '^MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD$' > zero-omega.log 2>&1
+          result=$?
+          set -e
+          cat zero-omega.log
+          test "$result" -ne 0
+          grep -q 'LibxcGgaGrad2StressAggregatesPublicFunctionalScaling' zero-omega.log
+          grep -qi 'nan' zero-omega.log

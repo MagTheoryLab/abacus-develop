@@ -442,7 +442,15 @@ void DiagoIterAssist<T, Device>::diag_hegvd(const int nstart,
     resmem_var_op()(eigenvalues, nstart);
     setmem_var_op()(eigenvalues, 0, nstart);
 
-    hegvd_op<T, Device>()(ctx, nstart, ldh, hcc, scc, eigenvalues, vcc);
+    try
+    {
+        hegvd_op<T, Device>()(ctx, nstart, ldh, hcc, scc, eigenvalues, vcc);
+    }
+    catch (const std::exception& error)
+    {
+        delmem_var_op()(eigenvalues);
+        ModuleBase::WARNING_QUIT("DiagoIterAssist::diag_hegvd", error.what());
+    }
 
     if (base_device::get_device_type(ctx) == base_device::GpuDevice)
     {

@@ -4,6 +4,8 @@
 #include <base/macros/macros.h>
 
 #include <cusolverDn.h>
+#include <stdexcept>
+#include <string>
 
 namespace hsolver
 {
@@ -53,10 +55,15 @@ void xhegvd_wrapper(
         A, lda, B, ldb, W, work, lwork, devInfo));
 
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
-    assert(0 == info_gpu);
+
     // free the buffer
     CHECK_CUDA(cudaFree(work));
     CHECK_CUDA(cudaFree(devInfo));
+    if (info_gpu != 0)
+    {
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(info_gpu)
+                                 + ", n=" + std::to_string(n));
+    }
 }
 #endif
 
@@ -86,10 +93,15 @@ void xhegvd_wrapper (
                                       reinterpret_cast<float2 *>(A), lda, reinterpret_cast<float2 *>(B), ldb, W, work, lwork, devInfo));
 
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
-    assert(0 == info_gpu);
+
     // free the buffer
     CHECK_CUDA(cudaFree(work));
     CHECK_CUDA(cudaFree(devInfo));
+    if (info_gpu != 0)
+    {
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(info_gpu)
+                                 + ", n=" + std::to_string(n));
+    }
 }
 
 static inline
@@ -118,10 +130,15 @@ void xhegvd_wrapper (
                                       reinterpret_cast<double2 *>(A), lda, reinterpret_cast<double2 *>(B), ldb, W, work, lwork, devInfo));
 
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
-    assert(0 == info_gpu);
+
     // free the buffer
     CHECK_CUDA(cudaFree(work));
     CHECK_CUDA(cudaFree(devInfo));
+    if (info_gpu != 0)
+    {
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(info_gpu)
+                                 + ", n=" + std::to_string(n));
+    }
 }
 
 #ifdef __LCAO

@@ -99,7 +99,9 @@ class Diago_DavSubspace
     base_device::DEVICE_CPU* cpu_ctx = {};
     base_device::AbacusDevice_t device = {};
 
-    void cal_grad(const HPsiFunc& hpsi_func,
+    int orthogonalize(const int nbase, const int count);
+
+    int cal_grad(const HPsiFunc& hpsi_func,
                   const HPsiFunc& spsi_func,
                   const int& dim,
                   const int& nbase,
@@ -195,7 +197,10 @@ class Diago_DavSubspace
     // using hegvd_op = container::kernels::lapack_hegvd<T, ct_Device>;
 
     const T *one = nullptr, *zero = nullptr, *neg_one = nullptr;
-    const T one_ = static_cast<T>(1.0), zero_ = static_cast<T>(0.0), neg_one_ = static_cast<T>(-1.0);
+    // cuDoubleComplex scalars passed to cuBLAS require 16-byte alignment.
+    alignas(16) const T one_ = static_cast<T>(1.0);
+    alignas(16) const T zero_ = static_cast<T>(0.0);
+    alignas(16) const T neg_one_ = static_cast<T>(-1.0);
 };
 
 } // namespace hsolver

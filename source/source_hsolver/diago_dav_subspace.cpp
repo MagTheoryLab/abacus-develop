@@ -16,6 +16,8 @@
 #include "source_hsolver/kernels/bpcg_kernel_op.h" // normalize_op, precondition_op, apply_eigenvalues_op
 
 #include <vector>
+#include <cmath>
+#include <limits>
 
 #ifdef __MPI
 #include <mpi.h>
@@ -140,14 +142,13 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
         unconv[m] = m;
     }
 
-    // compute h*psi_in_iter
-    // NOTE: bands after the first n_band should yield zero
-    // hpsi[:, 0:nbase_x] = H * psi_in_iter[:, 0:nbase_x]
-    hpsi_func(this->psi_in_iter, this->hpsi, this->dim, this->notconv);
-
-    // compute s*psi_in_iter
-    // spsi[:, 0:nbase_x] = S * psi_in_iter[:, 0:nbase_x]
     spsi_func(this->psi_in_iter, this->spsi, this->dim, this->notconv);
+    const int initial_rank = this->orthogonalize(0, this->n_band);
+    if (initial_rank != this->n_band)
+    {
+        ModuleBase::WARNING_QUIT("Diago_DavSubspace", "Linearly dependent initial wavefunctions");
+    }
+    hpsi_func(this->psi_in_iter, this->hpsi, this->dim, this->notconv);
 
     this->cal_elem(this->dim, nbase, this->notconv, this->psi_in_iter, this->spsi, this->hpsi, this->hcc, this->scc);
 
@@ -166,7 +167,7 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
     {
         dav_iter++;
 
-        this->cal_grad(hpsi_func,
+        const int added = this->cal_grad(hpsi_func,
                        spsi_func,
                        this->dim,
                        nbase,
@@ -178,9 +179,20 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
                        unconv.data(),
                        &eigenvalue_iter);
 
+        if (added == 0)
+        {
+            // Preserve the current Ritz vectors and the unconverged count. A
+            // rank-deficient correction block is not evidence of convergence.
+            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, this->n_band, nbase,
+                this->one, this->psi_in_iter, this->dim, this->vcc, this->nbase_x,
+                this->zero, psi_in, psi_in_dmax);
+            ModuleBase::timer::end("Diago_DavSubspace", "diag_once");
+            return dav_iter;
+        }
+
         this->cal_elem(this->dim,
                        nbase,
-                       this->notconv,
+                       added,
                        this->psi_in_iter,
                        this->spsi,
                        this->hpsi,
@@ -274,7 +286,7 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
 }
 
 template <typename T, typename Device>
-void Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
+int Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
                                             const HPsiFunc& spsi_func,
                                             const int& dim,
                                             const int& nbase,
@@ -282,11 +294,16 @@ void Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
                                             T* psi_iter,
                                             T* hpsi,
                                             T* spsi,
-                                            T* vcc,
+                                            T* vcc_in,
                                             const int* unconv,
                                             std::vector<Real>* eigenvalue_iter)
 {
     ModuleBase::timer::start("Diago_DavSubspace", "cal_grad");
+    // Residual construction scales and compacts coefficients. Keep the Ritz
+    // vectors intact when all correction directions are dependent.
+    T* vcc = nullptr;
+    resmem_complex_op()(vcc, this->nbase_x * this->n_band);
+    syncmem_complex_op()(vcc, vcc_in, this->nbase_x * this->n_band);
 
     for (size_t i = 0; i < notconv; i++)
     {
@@ -414,76 +431,116 @@ void Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
                                     (*eigenvalue_iter).data());
     }
 
-    // Normalize section
-#if defined(__CUDA) || defined(__ROCM)
-    if (this->device == base_device::GpuDevice)
+    spsi_func(psi_iter + nbase * dim, spsi + nbase * dim, dim, notconv);
+    const int added = this->orthogonalize(nbase, notconv);
+    if (added > 0)
     {
-        Real* psi_norm = nullptr;
-        resmem_real_op()(psi_norm, notconv);
-        setmem_real_op()(psi_norm, 0.0, notconv);
-
-        normalize_op<T, Device>()(this->dim,
-                                psi_iter,
-                                nbase,
-                                notconv,
-                                psi_norm);
-
-        // Check for zero norms (GPU path: copy norms from device to host)
-        Real* psi_norm_host = nullptr;
-        resmem_real_h_op()(psi_norm_host, notconv);
-        syncmem_var_d2h_op()(psi_norm_host, psi_norm, notconv);
-        for (int i = 0; i < notconv; i++)
-        {
-            if (psi_norm_host[i] <= 1.0e-12)
-            {
-                std::cout << "Diago_DavSubspace::cal_grad: psi_norm <= 0 for band " << i << std::endl;
-                std::cout << "This may be due to npwx < nbands: the number of plane waves is less than" << std::endl;
-                std::cout << "the number of bands, leading to a rank-deficient problem." << std::endl;
-                std::cout << "Please increase ecutwfc or reduce nbands." << std::endl;
-                delmem_real_h_op()(psi_norm_host);
-                delmem_real_op()(psi_norm);
-                ModuleBase::WARNING_QUIT("cal_grad", "psi_norm <= 0");
-            }
-        }
-        delmem_real_h_op()(psi_norm_host);
-        delmem_real_op()(psi_norm);
+        hpsi_func(psi_iter + nbase * dim, hpsi + nbase * dim, dim, added);
     }
-    else
-#endif
-    {
-        Real* psi_norm = nullptr;
-        resmem_real_h_op()(psi_norm, notconv);
-        setmem_real_h_op()(psi_norm, 0.0, notconv);
-
-        normalize_op<T, Device>()(this->dim,
-                                psi_iter,
-                                nbase,
-                                notconv,
-                                psi_norm);
-
-        // Check for zero norms (CPU path)
-        for (int i = 0; i < notconv; i++)
-        {
-            if (psi_norm[i] <= 1.0e-12)
-            {
-                std::cout << "Diago_DavSubspace::cal_grad: psi_norm <= 0 for band " << i << std::endl;
-                std::cout << "This may be due to npwx < nbands: the number of plane waves is less than" << std::endl;
-                std::cout << "the number of bands, leading to a rank-deficient problem." << std::endl;
-                std::cout << "Please increase ecutwfc or reduce nbands." << std::endl;
-                delmem_real_h_op()(psi_norm);
-                ModuleBase::WARNING_QUIT("cal_grad", "psi_norm <= 0");
-            }
-        }
-        delmem_real_h_op()(psi_norm);
-    }
-
-    // update hpsi[:, nbase:nbase+notconv]
-    // hpsi[:, nbase:nbase+notconv] = H * psi_iter[:, nbase:nbase+notconv]
-    hpsi_func(psi_iter + nbase * dim, hpsi + nbase * this->dim, this->dim, notconv);
-    spsi_func(psi_iter + nbase * dim, spsi + nbase * this->dim, this->dim, notconv);
+    delmem_complex_op()(vcc);
 
     ModuleBase::timer::end("Diago_DavSubspace", "cal_grad");
-    return;
+    return added;
+}
+
+template <typename T, typename Device>
+int Diago_DavSubspace<T, Device>::orthogonalize(const int nbase, const int count)
+{
+    // Project out the retained basis and whiten the correction block twice.
+    // Independent normalization does not remove nearly dependent directions;
+    // their ill-conditioned overlap invalidates the identity used by refresh.
+    // The unused H*psi columns provide scratch space without a PW-sized allocation.
+    ct::Tensor overlap(ct::DataTypeToEnum<T>::value, ct::DeviceTypeToEnum<ct_Device>::value,
+                       {std::max(nbase, count) * count});
+    ct::Tensor spectrum(ct::DataTypeToEnum<Real>::value, ct::DeviceTypeToEnum<ct_Device>::value,
+                        {count});
+    T* q = this->psi_in_iter + nbase * this->dim;
+    T* sq = this->spsi + nbase * this->dim;
+    T* scratch = this->hpsi + nbase * this->dim;
+    T* coefficients = overlap.data<T>();
+    std::vector<Real> eigenvalues(count);
+    std::vector<T> transform(count * count);
+    int rank = count;
+    for (int pass = 0; pass < 2 && rank > 0; ++pass)
+    {
+        Real original_norm = ModuleBase::dot_real_op<T, Device>()(this->dim * rank, q, sq, false);
+        if (this->diag_comm.nproc > 1)
+        {
+            Parallel_Reduce::reduce_pool(original_norm);
+        }
+        if (nbase > 0)
+        {
+            ModuleBase::gemm_op<T, Device>()('C', 'N', nbase, rank, this->dim,
+                this->one, this->psi_in_iter, this->dim, sq, this->dim,
+                this->zero, coefficients, nbase);
+            if (this->diag_comm.nproc > 1)
+            {
+                Parallel_Reduce::reduce_pool(coefficients, nbase * rank);
+            }
+            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, rank, nbase,
+                this->neg_one, this->psi_in_iter, this->dim, coefficients, nbase,
+                this->one, q, this->dim);
+            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, rank, nbase,
+                this->neg_one, this->spsi, this->dim, coefficients, nbase,
+                this->one, sq, this->dim);
+        }
+        ModuleBase::gemm_op<T, Device>()('C', 'N', rank, rank, this->dim,
+            this->one, q, this->dim, sq, this->dim, this->zero, coefficients, rank);
+        if (this->diag_comm.nproc > 1)
+        {
+            Parallel_Reduce::reduce_pool(coefficients, rank * rank);
+        }
+        std::fill(eigenvalues.begin(), eigenvalues.end(), Real(0));
+        std::fill(transform.begin(), transform.end(), T(0));
+        if (this->diag_comm.rank == 0)
+        {
+            ct::kernels::lapack_heevd<T, ct_Device>()(rank, coefficients, rank, spectrum.data<Real>());
+            syncmem_var_d2h_op()(eigenvalues.data(), spectrum.data<Real>(), rank);
+            syncmem_d2h_op()(transform.data(), coefficients, rank * rank);
+        }
+        if (this->diag_comm.nproc > 1)
+        {
+            // Only the root contributes, so every rank uses the same rotation
+            // even for a degenerate overlap spectrum.
+            Parallel_Reduce::reduce_pool(eigenvalues.data(), rank);
+            Parallel_Reduce::reduce_pool(transform.data(), rank * rank);
+        }
+        const Real cutoff = 64 * std::numeric_limits<Real>::epsilon()
+                            * std::max(std::abs(original_norm), std::abs(eigenvalues[rank - 1]));
+        if (!std::isfinite(eigenvalues.front()) || !std::isfinite(eigenvalues[rank - 1])
+            || eigenvalues.front() < -cutoff)
+        {
+            ModuleBase::WARNING_QUIT("Diago_DavSubspace", "Invalid wavefunction overlap");
+        }
+        int retained = 0;
+        for (int j = 0; j < rank; ++j)
+        {
+            if (eigenvalues[j] <= cutoff)
+            {
+                continue;
+            }
+            const Real scale = 1 / std::sqrt(eigenvalues[j]);
+            for (int i = 0; i < rank; ++i)
+            {
+                transform[retained * rank + i] = transform[j * rank + i] * scale;
+            }
+            ++retained;
+        }
+        if (retained > 0)
+        {
+            syncmem_h2d_op()(coefficients, transform.data(), rank * retained);
+            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, retained, rank,
+                this->one, q, this->dim, coefficients, rank,
+                this->zero, scratch, this->dim);
+            syncmem_complex_op()(q, scratch, this->dim * retained);
+            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, retained, rank,
+                this->one, sq, this->dim, coefficients, rank,
+                this->zero, scratch, this->dim);
+            syncmem_complex_op()(sq, scratch, this->dim * retained);
+        }
+        rank = retained;
+    }
+    return rank;
 }
 
 template <typename T, typename Device>
@@ -582,7 +639,7 @@ void Diago_DavSubspace<T, Device>::cal_elem(const int& dim,
     {
 #ifdef __DSP
         // Only on dsp hardware need an extra space to reduce data
-        mtfunc::dsp_dav_subspace_reduce(hcc, scc, nbase, this->nbase_x, this->notconv, this->diag_comm.comm);
+        mtfunc::dsp_dav_subspace_reduce(hcc, scc, nbase, this->nbase_x, notconv, this->diag_comm.comm);
 #else
         assert(this->diag_comm.comm == POOL_WORLD);
         Parallel_Reduce::reduce_pool(hcc + nbase * this->nbase_x, notconv * this->nbase_x);
@@ -832,7 +889,14 @@ int Diago_DavSubspace<T, Device>::diag(const HPsiFunc& hpsi_func,
     do
     {
 
-        sum_iter += this->diag_once(hpsi_func, spsi_func, psi_in, psi_in_dmax, eigenvalue_in_hsolver, ethr_band);
+        try
+        {
+            sum_iter += this->diag_once(hpsi_func, spsi_func, psi_in, psi_in_dmax, eigenvalue_in_hsolver, ethr_band);
+        }
+        catch (const std::exception& error)
+        {
+            ModuleBase::WARNING_QUIT("Diago_DavSubspace::diag", error.what());
+        }
 
         ++ntry;
 

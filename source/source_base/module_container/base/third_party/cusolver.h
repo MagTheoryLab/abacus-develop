@@ -505,7 +505,8 @@ void hegvd (cusolverDnHandle_t& cusolver_handle, const int& itype, const char& j
 
     CHECK_CUDA(cudaMemcpy(&h_info, d_info.get(), sizeof(int), cudaMemcpyDeviceToHost));
     if (h_info != 0) {
-        throw std::runtime_error("heevd: failed to invert matrix");
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(h_info)
+                                 + ", n=" + std::to_string(n));
     }
 }
 static inline
@@ -527,7 +528,8 @@ void hegvd (cusolverDnHandle_t& cusolver_handle, const int& itype, const char& j
 
     CHECK_CUDA(cudaMemcpy(&h_info, d_info.get(), sizeof(int), cudaMemcpyDeviceToHost));
     if (h_info != 0) {
-        throw std::runtime_error("heevd: failed to invert matrix");
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(h_info)
+                                 + ", n=" + std::to_string(n));
     }
 }
 static inline
@@ -549,7 +551,8 @@ void hegvd (cusolverDnHandle_t& cusolver_handle, const int& itype, const char& j
 
     CHECK_CUDA(cudaMemcpy(&h_info, d_info.get(), sizeof(int), cudaMemcpyDeviceToHost));
     if (h_info != 0) {
-        throw std::runtime_error("heevd: failed to invert matrix");
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(h_info)
+                                 + ", n=" + std::to_string(n));
     }
 }
 static inline
@@ -571,7 +574,8 @@ void hegvd (cusolverDnHandle_t& cusolver_handle, const int& itype, const char& j
 
     CHECK_CUDA(cudaMemcpy(&h_info, d_info.get(), sizeof(int), cudaMemcpyDeviceToHost));
     if (h_info != 0) {
-        throw std::runtime_error("heevd: failed to invert matrix");
+        throw std::runtime_error("hegvd failed: info=" + std::to_string(h_info)
+                                 + ", n=" + std::to_string(n));
     }
 }
 

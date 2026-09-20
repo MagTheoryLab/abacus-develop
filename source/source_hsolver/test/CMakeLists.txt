@@ -76,7 +76,7 @@ if (ENABLE_MPI)
   AddTest(
     TARGET MODULE_HSOLVER_pw
     LIBS parameter  psi device base container symmetry
-    SOURCES test_hsolver_pw.cpp ../hsolver_pw.cpp ../hsolver_lcaopw.cpp ../diago_bpcg.cpp ../diago_dav_subspace.cpp ../diag_const_nums.cpp ../diago_iter_assist.cpp ../para_lin_tf.cpp
+    SOURCES test_hsolver_pw.cpp test_diago_dav_subspace.cpp ../hsolver_pw.cpp ../hsolver_lcaopw.cpp ../diago_bpcg.cpp ../diago_dav_subspace.cpp ../diag_const_nums.cpp ../diago_iter_assist.cpp ../para_lin_tf.cpp
   ../../source_estate/elecstate_tools.cpp ../../source_estate/occupy.cpp ../../source_base/module_fft/fft_bundle.cpp ../../source_base/module_fft/fft_cpu.cpp
   ../../source_cell/klist.cpp ../../source_cell/klist_io.cpp ../../source_cell/parallel_kpoints.cpp ../../source_cell/reciprocal_grid.cpp
   )
@@ -112,6 +112,26 @@ if (ENABLE_MPI)
     endif()
   endif()
   if (USE_CUDA)
+  AddTest(
+    TARGET MODULE_HSOLVER_dav_subspace_gpu
+    LIBS parameter base device container psi MPI::MPI_CXX
+    KEEP_FEATURE_DEFINITIONS __CUDA
+    SOURCES test_diago_dav_subspace.cpp ../diago_dav_subspace.cpp
+            ../diag_hs_para.cpp ../diago_pxxxgvx.cpp ../diago_scalapack.cpp
+  )
+  if(TARGET ELPA::ELPA)
+    target_sources(MODULE_HSOLVER_dav_subspace_gpu PRIVATE ../diago_elpa.cpp)
+    target_link_libraries(MODULE_HSOLVER_dav_subspace_gpu PRIVATE ELPA::ELPA genelpa)
+  endif()
+  add_test(
+    NAME MODULE_HSOLVER_dav_subspace_gpu_parallel
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+            $<TARGET_FILE:MODULE_HSOLVER_dav_subspace_gpu>
+            --gtest_filter=DiagoDavSubspace.DistributedCorrections
+  )
+  set_tests_properties(MODULE_HSOLVER_dav_subspace_gpu
+                       MODULE_HSOLVER_dav_subspace_gpu_parallel
+                       PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1" RUN_SERIAL TRUE)
   AddTest(
     TARGET MODULE_HSOLVER_LCAO_cusolver
     LIBS parameter   base psi device

@@ -3,7 +3,7 @@ AddTest(
     TARGET stress_loc_gpu_test
     LIBS CUDA::cudart
     KEEP_FEATURE_DEFINITIONS __CUDA
-    SOURCES stress_loc_gpu_test.cpp ../cuda/stress_op.cu
+    SOURCES test_stress_loc_gpu.cpp ../cuda/stress_op.cu
 )
 endif()
 abacus_disable_feature_definitions(__LCAO)

@@ -3,9 +3,15 @@ add_subdirectory(module_neighbor)
 add_subdirectory(module_neighlist)
 
 add_library(
+    domain_decomposition
+    OBJECT
+    domain_decomposition.cpp
+)
+
+add_library(
     cell
     OBJECT
-    base_cell.cpp
+    basecell.cpp
     atom_pseudo.cpp
     atom_spec.cpp
     pseudo.cpp
@@ -15,8 +21,8 @@ add_library(
     read_pp_upf201.cpp
     read_pp_blps.cpp
     read_pp_vwr.cpp
-    distributed_mdcell_reader.cpp
-    md_cell.cpp
+    mdcell_reader.cpp
+    mdcell.cpp
     unitcell.cpp
     read_atoms.cpp
     read_atoms_helper.cpp
@@ -27,6 +33,7 @@ add_library(
     parallel_kpoints.cpp
     cell_index.cpp
     cell_tools.cpp
+    record_adj.cpp
     check_atomic_stru.cpp
     update_cell.cpp
     magnetism.cpp

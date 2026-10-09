@@ -110,8 +110,7 @@ Diago_DavSubspace<T, Device>::~Diago_DavSubspace()
 }
 
 template <typename T, typename Device>
-int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
-                                            const HPsiFunc& spsi_func,
+int Diago_DavSubspace<T, Device>::diag_once(const HSOperator<T, Device>& op,
                                             T* psi_in,
                                             const int psi_in_dmax,
                                             Real* eigenvalue_in_hsolver,
@@ -142,13 +141,13 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
         unconv[m] = m;
     }
 
-    spsi_func(this->psi_in_iter, this->spsi, this->dim, this->notconv);
+    op.spsi(this->psi_in_iter, this->spsi, this->dim, this->notconv);
     const int initial_rank = this->orthogonalize(0, this->n_band);
     if (initial_rank != this->n_band)
     {
         ModuleBase::WARNING_QUIT("Diago_DavSubspace", "Linearly dependent initial wavefunctions");
     }
-    hpsi_func(this->psi_in_iter, this->hpsi, this->dim, this->notconv);
+    op.hpsi(this->psi_in_iter, this->hpsi, this->dim, this->notconv);
 
     this->cal_elem(this->dim, nbase, this->notconv, this->psi_in_iter, this->spsi, this->hpsi, this->hcc, this->scc);
 
@@ -167,8 +166,7 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
     {
         dav_iter++;
 
-        const int added = this->cal_grad(hpsi_func,
-                       spsi_func,
+        const int added = this->cal_grad(op,
                        this->dim,
                        nbase,
                        this->notconv,
@@ -286,8 +284,7 @@ int Diago_DavSubspace<T, Device>::diag_once(const HPsiFunc& hpsi_func,
 }
 
 template <typename T, typename Device>
-int Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
-                                            const HPsiFunc& spsi_func,
+int Diago_DavSubspace<T, Device>::cal_grad(const HSOperator<T, Device>& op,
                                             const int& dim,
                                             const int& nbase,
                                             const int& notconv,
@@ -431,11 +428,11 @@ int Diago_DavSubspace<T, Device>::cal_grad(const HPsiFunc& hpsi_func,
                                     (*eigenvalue_iter).data());
     }
 
-    spsi_func(psi_iter + nbase * dim, spsi + nbase * dim, dim, notconv);
+    op.spsi(psi_iter + nbase * dim, spsi + nbase * dim, dim, notconv);
     const int added = this->orthogonalize(nbase, notconv);
     if (added > 0)
     {
-        hpsi_func(psi_iter + nbase * dim, hpsi + nbase * dim, dim, added);
+        op.hpsi(psi_iter + nbase * dim, hpsi + nbase * dim, dim, added);
     }
     delmem_complex_op()(vcc);
 
@@ -872,8 +869,7 @@ void Diago_DavSubspace<T, Device>::refresh(const int& dim,
 }
 
 template <typename T, typename Device>
-int Diago_DavSubspace<T, Device>::diag(const HPsiFunc& hpsi_func,
-                                       const HPsiFunc& spsi_func,
+int Diago_DavSubspace<T, Device>::diag(const HSOperator<T, Device>& op,
                                        T* psi_in,
                                        const int psi_in_dmax,
                                        Real* eigenvalue_in_hsolver,
@@ -891,7 +887,7 @@ int Diago_DavSubspace<T, Device>::diag(const HPsiFunc& hpsi_func,
 
         try
         {
-            sum_iter += this->diag_once(hpsi_func, spsi_func, psi_in, psi_in_dmax, eigenvalue_in_hsolver, ethr_band);
+            sum_iter += this->diag_once(op, psi_in, psi_in_dmax, eigenvalue_in_hsolver, ethr_band);
         }
         catch (const std::exception& error)
         {

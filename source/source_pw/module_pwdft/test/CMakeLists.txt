@@ -23,12 +23,6 @@ AddTest(
 )
 
 AddTest(
-	TARGET MODULE_PW_radial_proj_test
-	LIBS parameter  base device
-	SOURCES radial_proj_test.cpp ../radial_proj.cpp
-)
-
-AddTest(
 	TARGET MODULE_PW_dftu_base_test
 	LIBS parameter base device
 	SOURCES dftu_base_test.cpp
@@ -36,6 +30,7 @@ AddTest(
 	../dftu_base_io.cpp
 	../yukawa_screening.cpp
 	../../../source_estate/occ_matrix.cpp
+	../../../source_estate/occ_mixer.cpp
 	../../../source_cell/unitcell.cpp
 	../../../source_cell/atom_spec.cpp
 	../../../source_cell/atom_pseudo.cpp
@@ -51,6 +46,13 @@ AddTest(
 	../../../source_cell/read_orb.cpp
 	../../../source_cell/read_stru.cpp
 	../../../source_cell/bcast_cell.cpp
+)
+
+AddTest(
+	TARGET MODULE_PW_test_dftu_pw_tools
+	LIBS parameter base device
+	SOURCES test_dftu_pw_tools.cpp
+	../dftu_pw_tools.cpp
 )
 
 AddTest(

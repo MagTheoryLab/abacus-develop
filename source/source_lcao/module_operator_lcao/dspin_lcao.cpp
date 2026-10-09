@@ -1,11 +1,12 @@
 #include "dspin_lcao.h"
-#include "dspin_tools.h"
-#include "source_lcao/module_deltaspin/spin_constrain.h"
-#include "source_base/timer.h"
+
 #include "source_base/memory_recorder.h"
-#include "source_base/tool_title.h"
 #include "source_base/parallel_reduce.h"
+#include "source_base/timer.h"
+#include "source_base/tool_title.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_lcao/module_deltaspin/mi_tools.h"
+#include "source_lcao/module_deltaspin/spin_constrain.h"
 
 #include <algorithm>
 
@@ -61,8 +62,11 @@ inline void cal_coeff_lambda(const std::vector<double>& current_lambda, std::vec
 inline void cal_coeff_lambda(const std::vector<double>& current_lambda, std::vector<std::complex<double>>& coefficients)
 {
     const ModuleBase::Vector3<double> lambda(current_lambda[0], current_lambda[1], current_lambda[2]);
-    const std::array<std::complex<double>, 4> matrix = hamilt::deltaspin::lambda_to_spinor_matrix(lambda);
-    std::copy(matrix.begin(), matrix.end(), coefficients.begin());
+    const auto spinor = spinconstrain::pauli_vector_to_spinor(lambda);
+    for (int is = 0; is < 4; ++is)
+    {
+        coefficients[is] = spinor[is];
+    }
 }
 
 template <typename TK, typename TR>
@@ -226,11 +230,15 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
     }
     this->paraV = this->hR->get_paraV();
     ModuleBase::timer::start("DeltaSpin", "cal_pre_HR");
-    for (auto* hr : this->pre_hr)
+    // Reset the caches from a possible previous initialization:
+    // pre_hr holds raw HContainer pointers, so clear() alone would leak them,
+    // and stale B_I_data would survive for atoms that are no longer constrained.
+    for (auto& hr : this->pre_hr)
     {
         delete hr;
     }
-    this->pre_hr.assign(this->ucell->nat, nullptr);
+    this->pre_hr.clear();
+    this->pre_hr.resize(this->ucell->nat, nullptr);
     this->B_I_data.clear();
     this->B_I_data.resize(this->ucell->nat);
 

@@ -5,9 +5,13 @@
 #include "source_base/parallel_device.h"
 #include "source_base/parallel_global.h"
 #include "source_base/timer.h"
+#include "source_base/global_variable.h"
+#include "source_base/parallel_comm.h"
 #include "source_base/tool_quit.h"
 #include "source_basis/module_pw/pw_basis_k.h"
 #include "source_cell/unitcell.h"
+#include "source_hsolver/diag_comm_info.h"
+#include "source_hamilt/hamilt_hs_adapter.h"
 #include "source_hsolver/diago_iter_assist.h"
 #include "source_io/module_parameter/parameter.h"
 #include "source_psi/psi_init_atomic.h"
@@ -185,6 +189,11 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
     const int nbands_l = psi->get_nbands();
     const int nbasis = psi->get_nbasis();
     const bool not_equal = (nbands_start != nbands_l);
+#ifdef __MPI
+    const hsolver::diag_comm_info diag_comm(POOL_WORLD, GlobalV::RANK_IN_POOL, GlobalV::NPROC_IN_POOL);
+#else
+    const hsolver::diag_comm_info diag_comm(0, 1);
+#endif
 
     Psi<T>* psi_cpu = reinterpret_cast<psi::Psi<T>*>(psi);
     Psi<T, Device>* psi_device = kspw_psi;
@@ -213,6 +222,9 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
         }
     }
 
+    // the subspace diagonalization sees the Hamiltonian only through this operator
+    hamilt::HamiltHSOperator<T, Device> op(p_hamilt, &this->pw_wfc);
+
     // loop over kpoints, make it possible to only allocate memory for psig at the only one kpt
     // like (1, nbands, npwx), in which npwx is the maximal npw of all kpoints
     for (int ik = 0; ik < this->pw_wfc.nks; ik++)
@@ -223,7 +235,7 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
         kspw_psi->fix_k(ik);
 
         //! Update Hamiltonian from other kpoint to the given one
-        p_hamilt->updateHk(ik);
+        op.update_k(ik);
         if (fill)
         {
             //! initialize psi_cpu
@@ -241,23 +253,25 @@ void PSIPrepare<T, Device>::initialize_psi(Psi<std::complex<double>>* psi,
                 {
                     // for diagH_subspace_init, psi_device->get_pointer() and kspw_psi->get_pointer() should be
                     // different
-                    hsolver::DiagoIterAssist<T, Device>::diag_subspace_init(p_hamilt,
-                                                                             psi_device->get_pointer(),
-                                                                             nbands_start,
-                                                                             nbasis,
-                                                                             *(kspw_psi),
-                                                                             etatom.data(),
-                                                                             this->basis_type,
-                                                                             PARAM.inp.calculation);
+                    hsolver::DiagoIterAssist<T, Device>::diag_subspace_init(op,
+                                                                            psi_device->get_pointer(),
+                                                                            nbands_start,
+                                                                            nbasis,
+                                                                            *(kspw_psi),
+                                                                            etatom.data(),
+                                                                            this->basis_type,
+                                                                            PARAM.inp.calculation,
+                                                                            diag_comm);
                 }
                 else
                 {
                     // for diagH_subspace, psi_device->get_pointer() and kspw_psi->get_pointer() can be the same
-                    hsolver::DiagoIterAssist<T, Device>::diag_subspace(p_hamilt,
-                                                                        *psi_device,
-                                                                        *kspw_psi,
-                                                                        etatom.data(),
-                                                                        nbands_start);
+                    hsolver::DiagoIterAssist<T, Device>::diag_subspace(op,
+                                                                       *psi_device,
+                                                                       *kspw_psi,
+                                                                       etatom.data(),
+                                                                       diag_comm,
+                                                                       nbands_start);
                 }
             }
             else // dav, bpcg

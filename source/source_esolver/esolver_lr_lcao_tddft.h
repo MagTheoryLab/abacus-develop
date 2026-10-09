@@ -1,4 +1,6 @@
-#pragma once
+#ifndef ABACUS_SOURCE_ESOLVER_ESOLVER_LR_LCAO_TDDFT_H
+#define ABACUS_SOURCE_ESOLVER_ESOLVER_LR_LCAO_TDDFT_H
+
 #include "source_esolver/esolver_fp.h"
 #include "source_io/module_parameter/input_parameter.h"
 #include "source_cell/unitcell.h"
@@ -43,12 +45,12 @@ namespace ModuleESolver
         virtual void cal_force(BaseCell& basecell, ModuleBase::matrix& force) override
         {
             static_cast<void>(force);
-            basecell.require_kind(BaseCell::Kind::unit_cell, __FUNCTION__);
+            basecell.require_kind(BaseCell::Kind::unitcell, __FUNCTION__);
         };
         virtual void cal_stress(BaseCell& basecell, ModuleBase::matrix& stress) override
         {
             static_cast<void>(stress);
-            basecell.require_kind(BaseCell::Kind::unit_cell, __FUNCTION__);
+            basecell.require_kind(BaseCell::Kind::unitcell, __FUNCTION__);
         };
 
       protected:
@@ -144,3 +146,5 @@ namespace ModuleESolver
 #endif
     };
 }
+
+#endif // ABACUS_SOURCE_ESOLVER_ESOLVER_LR_LCAO_TDDFT_H

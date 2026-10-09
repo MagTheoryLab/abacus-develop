@@ -490,15 +490,16 @@ The other way is only available when compiling with LIBXC, and it allows for sup
     }
     {
         Input_Item item("gga_grad");
-        item.annotation = "GGA gradient method for nspin=4: 0 original algorithm, 1 collinear approx, 2 projected div(h), 3 continuous B2 response";
+        item.annotation = "Noncollinear GGA gradient method: 0 original, 1 local axis, 2 regularized projected LCA, 3 continuous B2 response";
         item.category = "Electronic structure";
         item.type = "Integer";
-        item.description = R"(Method used to evaluate the density gradient entering GGA exchange-correlation terms in noncollinear-spin (nspin=4) calculations. With rho_up/dn = (rho +/- |m|)/2 and m_hat = m/|m|:
-* 0: original algorithm; the default. When the initial magnetic moments in STRU are all collinear, their common direction u is used as a global quantization axis and the up/down densities are defined w.r.t. this axis via the sign of m . u. This reproduces the nspin=2 collinear result exactly for collinear configurations, but makes the magnetic potential energy surface discontinuous when the initial moments are tilted slightly away from collinearity.
-* 1: collinear approximation without the global direction: up/down are always defined w.r.t. the local |m|, so the magnetic potential energy surface stays continuous, at the price of giving up exact consistency with nspin=2 for collinear configurations. (For LIBXC functionals the global axis is never used, so 0 and 1 are equivalent.)
-* 2: projected method. The gradients use the full chain rule, grad(rho_up/dn) = (grad(rho) +/- m_hat . grad(m))/2, but the divergence of h = df/d(grad rho) in the potential is projected onto m_hat: v_mu -= m_hat_mu * div((h_up - h_dn)/2), dropping the (h_up - h_dn) . grad(m_hat_mu) cross terms.
-* 3: continuous B2 response. It uses gamma_up/dn = (|grad rho|^2 + sum_mu |grad m_mu|^2)/4 +/- grad rho . grad|m|/2. Unlike 2, this retains transverse magnetization-gradient power and the local response of m_hat, so the potential is the full variational derivative of the B2 energy density.
-This parameter only takes effect for nspin=4 with GGA functionals (and magnetic calculation). Method 3 currently supports built-in functionals only; selecting it with a LIBXC functional is rejected.)";
+        item.description = R"(Selects the local spin mapping for LDA/GGA functionals in magnetic nspin=4 calculations.
+* 0: preserves the original algorithm (default).
+* 1: uses the local magnetization magnitude instead of the global quantization axis in the built-in GGA gradient correction. For LIBXC functionals, 0 and 1 are equivalent.
+* 2: uses a C2-regularized magnetization magnitude with eta = 1e-3 in atomic density units. The spin densities are (abs(n + rho_core) +/- min(S_eta(m), abs(n + rho_core)))/2. GGA gradients are the local-map Jacobian applied to the FFT gradients of the four density channels. The potential reverses this same discrete energy graph, including the radial Hessian and density/sigma clipping branches; the GGA stress uses the corresponding metric derivative.
+For r = |m| and x = r/eta, S_eta = eta*x^3*(3*x^2 - 8*x + 6) for r < eta, and S_eta = r otherwise. The regularization is part of the functional definition, including its first and second derivatives.
+* 3: retains the built-in continuous B2 invariants, including transverse magnetization gradients and the local response of the magnetization direction. This mode supports built-in functionals only; LIBXC GGA functionals are rejected.
+Mode 2 also uses this local map for the LDA contribution. Other spin configurations retain their existing behavior.)";
         item.default_value = "0";
         read_sync_int(input.gga_grad);
         item.check_value = [](const Input_Item& item, const Parameter& para) {

@@ -184,6 +184,18 @@ namespace XC_Functional_Libxc
         const std::vector<double> &rho,
         const std::vector<double> &sigma);
 
+    // threshold masks for the xc potential (Quantum ESPRESSO convention):
+    // the first mask applies to exc and vrho, the second one only to vsigma
+    extern std::pair<std::vector<double>, std::vector<double>> cal_sgn_vxc(
+        const double rho_threshold_vrho,
+        const double rho_threshold_vsigma,
+        const double grho_threshold_vsigma,
+        const xc_func_type &func,
+        const int nspin,
+        const std::size_t nrxx,
+        const std::vector<double> &rho,
+        const std::vector<double> &sigma);
+
     // converting etxc from exc (libxc=>abacus)
     extern double convert_etxc(
         const int nspin,
@@ -206,23 +218,19 @@ namespace XC_Functional_Libxc
         const std::vector<double> &vrho,
         const std::vector<double> &vsigma);
 
-    // Convert vtxc and v from vrho and vsigma (libxc=>abacus).  Its non-SF and
-    // LDA branches remain active.  The SF GGA branch is legacy: the public
-    // gga_grad=2 driver uses reverse_ncl_sf_discrete, while the public driver
-    // rejects the remaining gga_grad=3 compatibility implementation.
+    // Convert collinear LibXC derivatives to the potential.
     extern std::pair<double, ModuleBase::matrix> convert_vtxc_v(
         const xc_func_type &func,
         const int nspin,
         const std::size_t nrxx,
-        const std::vector<double> &sgn,
+        const std::vector<double> &sgn_vrho,
+        const std::vector<double> &sgn_vsigma,
         const std::vector<double> &rho,
         const std::vector<std::vector<ModuleBase::Vector3<double>>> &gdr,
         const std::vector<double> &vrho,
         const std::vector<double> &vsigma,
         const double tpiba,
-        const Charge* const chr,
-        const bool use_sf,
-        const int gga_grad);
+        const Charge* const chr);
 
     // dh for gga v
     extern std::vector<std::vector<double>> cal_dh(
@@ -243,41 +251,6 @@ namespace XC_Functional_Libxc
         const std::vector<double> &amag,
         const ModuleBase::matrix &v,
         const bool has_mag);
-
-    // Legacy raw-|m| SF helpers.  The public driver keeps them only for the
-    // gga_grad=3 compatibility path; gga_grad=2 must use NclSfDiscreteData so
-    // its forward and reverse share one complete map.
-    extern std::vector<double> compute_mag_part_nspin4(
-        const std::size_t nrxx,
-        const Charge* const chr);
-
-    extern std::vector<std::vector<ModuleBase::Vector3<double>>> cal_gdr_sf(
-        const int nspin,
-        const std::size_t nrxx,
-        const std::vector<double> &rho,
-        const std::vector<double> &mag_part,
-        const double tpiba,
-        const Charge* const chr);
-
-    // Legacy gga_grad=3 SF reverse.  gga_grad=2 is deliberately rejected so a
-    // direct low-level caller cannot recover the disproved projected response.
-    extern std::vector<std::vector<double>> cal_dh_sf(
-        const int nspin,
-        const std::size_t nrxx,
-        const std::vector<double> &sgn,
-        const std::vector<std::vector<ModuleBase::Vector3<double>>> &gdr,
-        const std::vector<double> &vsigma,
-        const std::vector<double> &mag_part,
-        const int gga_grad,
-        const double tpiba,
-        const Charge* const chr);
-
-    extern ModuleBase::matrix convert_v_nspin4_sf(
-        const std::size_t nrxx,
-        const Charge* const chr,
-        const std::vector<double> &mag_part,
-        const ModuleBase::matrix &v);
-
 
 //-------------------
 //  libxc_lda_wrap.cpp

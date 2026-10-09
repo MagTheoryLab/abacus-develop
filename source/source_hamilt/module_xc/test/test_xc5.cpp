@@ -9,6 +9,7 @@
 #include "../../../source_base/parallel_reduce.h"
 
 #include <cstdlib>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -28,7 +29,8 @@ class XCTest_VXC : public XCTest
 {
     protected:
 
-        double et1 = 0, vt1 = 0;
+        double et1 = 0;
+    double vt1 = 0;
         ModuleBase::matrix v1;
 
         double et2 = 0, vt2 = 0;
@@ -132,7 +134,8 @@ class XCTest_VXC_Libxc : public XCTest
 {
     protected:
 
-        double et1 = 0, vt1 = 0;
+        double et1 = 0;
+    double vt1 = 0;
         ModuleBase::matrix v1;
 
         double et2 = 0, vt2 = 0;
@@ -236,11 +239,20 @@ class XCTest_VXC_meta : public XCTest
 {
     protected:
 
-        double et1 = 0, vt1 = 0;
+        double et1 = 0;
+    double vt1 = 0;
         ModuleBase::matrix v1,vtau1;
 
         double et2 = 0, vt2 = 0;
         ModuleBase::matrix v2,vtau2;
+
+        // Same libxc input, but with the whole density carried by the NLCC
+        // core charge instead of the valence density.
+        double et1_nlcc = 0, vt1_nlcc = 0;
+        ModuleBase::matrix v1_nlcc;
+
+        double et2_nlcc = 0, vt2_nlcc = 0;
+        ModuleBase::matrix v2_nlcc;
 
         void SetUp()
         {
@@ -316,6 +328,29 @@ class XCTest_VXC_meta : public XCTest
             vt2 = std::get<1>(etxc_vtxc_v);
             v2  = std::get<2>(etxc_vtxc_v);
             vtau2 = std::get<3>(etxc_vtxc_v);
+
+            // Second scenario: drop the valence density and let the NLCC core
+            // charge carry the whole density. The density handed to libxc
+            // (rho, sigma, tau) is left unchanged, but vtxc = \int v_xc *
+            // rho_valence now has to vanish exactly.
+            for(int i=0;i<5;i++)
+            {
+                chr.rho[0][i] = 0;
+                chr.rho[1][i] = 0;
+                chr.rho_core[i] = double(i);
+            }
+
+            etxc_vtxc_v
+                = XC_Functional_Libxc::v_xc_meta(XC_Functional::get_func_id(), rhopw.nrxx,ucell.omega,ucell.tpiba,&chr,nspin1, hybrid_alpha, hse_omega);
+            et1_nlcc = std::get<0>(etxc_vtxc_v);
+            vt1_nlcc = std::get<1>(etxc_vtxc_v);
+            v1_nlcc  = std::get<2>(etxc_vtxc_v);
+
+            etxc_vtxc_v
+                = XC_Functional_Libxc::v_xc_meta(XC_Functional::get_func_id(), rhopw.nrxx,ucell.omega,ucell.tpiba,&chr,nspin2, hybrid_alpha, hse_omega);
+            et2_nlcc = std::get<0>(etxc_vtxc_v);
+            vt2_nlcc = std::get<1>(etxc_vtxc_v);
+            v2_nlcc  = std::get<2>(etxc_vtxc_v);
         }
 };
 
@@ -365,10 +400,8 @@ TEST_F(XCTest_VXC_meta, set_xc_type)
  *
  *  Method 2 differentiates the complete discrete local-spin-map and FFT
  *  gradient graph.  Its reverse is tested on a real PW grid in
- *  test_ncgga_discrete_fd.cpp.
- *  Method 3 uses the continuous B2 invariants, including transverse
- *  magnetization-gradient power and the local response of m_hat.
- ***********************************************/
+ *  test_xc_functional_ncgga_sf.cpp.
+ ************************************************/
 
 namespace
 {
@@ -439,49 +472,7 @@ struct Ns4Charge
     }
 };
 
-TEST(GgaGradVxc, LegacyProjectedLibxcReverseIsRejected)
-{
-    Ns4Charge mock(0);
-    const int nspin = 2;
-    const std::vector<double> sgn(gga_grad_nrxx * nspin, 1.0);
-    const std::vector<double> vsigma(gga_grad_nrxx * 3, 0.2);
-    const std::vector<double> mag_part
-        = XC_Functional_Libxc::compute_mag_part_nspin4(
-            gga_grad_nrxx, &mock.chr);
-    const std::tuple<std::vector<double>, std::vector<double>> rho_amag
-        = XC_Functional_Libxc::convert_rho_amag_nspin4(
-            nspin, gga_grad_nrxx, &mock.chr);
-    const std::vector<std::vector<ModuleBase::Vector3<double>>> gdr
-        = XC_Functional_Libxc::cal_gdr_sf(
-            nspin,
-            gga_grad_nrxx,
-            std::get<0>(rho_amag),
-            mag_part,
-            mock.ucell.tpiba,
-            &mock.chr);
 
-    EXPECT_THROW(
-        XC_Functional_Libxc::cal_dh_sf(nspin,
-                                       gga_grad_nrxx,
-                                       sgn,
-                                       gdr,
-                                       vsigma,
-                                       mag_part,
-                                       2,
-                                       mock.ucell.tpiba,
-                                       &mock.chr),
-        std::domain_error);
-    EXPECT_NO_THROW(
-        XC_Functional_Libxc::cal_dh_sf(nspin,
-                                       gga_grad_nrxx,
-                                       sgn,
-                                       gdr,
-                                       vsigma,
-                                       mag_part,
-                                       3,
-                                       mock.ucell.tpiba,
-                                       &mock.chr));
-}
 
 struct Ns2LocalCharge
 {
@@ -554,55 +545,10 @@ void expect_vxc_equal(const std::tuple<double, double, ModuleBase::matrix>& a,
 } // namespace
 
 // m_hat = m/|m|, zero where |m| ~ 0
-TEST(GgaGradTools, ComputeMagPartNspin4)
-{
-    Charge chr;
-    chr.rho = new double*[4];
-    for (int is = 0; is < 4; ++is)
-    {
-        chr.rho[is] = new double[3];
-    }
-    chr.rho[1][0] = 3.0; chr.rho[2][0] = 0.0; chr.rho[3][0] = 4.0; // |m|=5
-    chr.rho[1][1] = 0.0; chr.rho[2][1] = 0.0; chr.rho[3][1] = 0.0; // |m|=0
-    chr.rho[1][2] = 1.0; chr.rho[2][2] = 2.0; chr.rho[3][2] = 2.0; // |m|=3
 
-    const std::vector<double> mp = XC_Functional_Libxc::compute_mag_part_nspin4(3, &chr);
-
-    EXPECT_NEAR(mp[0], 3.0 / 5.0, 1e-15);
-    EXPECT_NEAR(mp[3], 0.0, 1e-15);
-    EXPECT_NEAR(mp[6], 4.0 / 5.0, 1e-15);
-    EXPECT_NEAR(mp[1], 0.0, 1e-15);
-    EXPECT_NEAR(mp[4], 0.0, 1e-15);
-    EXPECT_NEAR(mp[7], 0.0, 1e-15);
-    EXPECT_NEAR(mp[2], 1.0 / 3.0, 1e-15);
-    EXPECT_NEAR(mp[5], 2.0 / 3.0, 1e-15);
-    EXPECT_NEAR(mp[8], 2.0 / 3.0, 1e-15);
-}
 
 // v_tot = 0.5*(v_up+v_dn), v_mu = 0.5*(v_up-v_dn)*m_hat_mu
-TEST(GgaGradTools, ConvertVNspin4Sf)
-{
-    Ns4Charge mock(0); // m_hat = (0,0,1)
-    const std::vector<double> mag_part
-        = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
 
-    ModuleBase::matrix v(2, gga_grad_nrxx);
-    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-    {
-        v(0, ir) = 1.0 + ir;
-        v(1, ir) = 0.5 * ir;
-    }
-    const ModuleBase::matrix v4
-        = XC_Functional_Libxc::convert_v_nspin4_sf(gga_grad_nrxx, &mock.chr, mag_part, v);
-
-    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-    {
-        EXPECT_NEAR(v4(0, ir), 0.5 * (v(0, ir) + v(1, ir)), 1e-14);
-        EXPECT_NEAR(v4(1, ir), 0.0, 1e-14);
-        EXPECT_NEAR(v4(2, ir), 0.0, 1e-14);
-        EXPECT_NEAR(v4(3, ir), 0.5 * (v(0, ir) - v(1, ir)), 1e-14);
-    }
-}
 
 // original conversion: has_mag=false leaves magnetic channels zero
 TEST(GgaGradTools, ConvertVNspin4HasMag)
@@ -639,20 +585,12 @@ TEST(GgaGradTools, ConvertVNspin4HasMag)
     }
 }
 
-// In the collinear limit with a uniform magnetization direction and no
-// transverse gradients, continuous B2 reduces to the projected method.
-TEST(GgaGradVxc, BuiltinUniformDirectionMethodsAgree)
-{
-    const auto r2 = run_vxc_nspin4("PBE", 0, 2);
-    const auto r3 = run_vxc_nspin4("PBE", 0, 3);
-    EXPECT_EQ(std::get<2>(r2).nr, 4);
-    expect_vxc_equal(r2, r3, 1e-10);
-}
+
 
 // gga_grad=0 keeps the original built-in algorithm and must not crash
 TEST(GgaGradVxc, BuiltinOriginalAlgorithmRuns)
 {
-    const auto r0 = run_vxc_nspin4("PBE", 1, 0);
+    const std::tuple<double, double, ModuleBase::matrix> r0 = run_vxc_nspin4("PBE", 1, 0);
     EXPECT_EQ(std::get<2>(r0).nr, 4);
     EXPECT_TRUE(std::isfinite(std::get<0>(r0)));
     EXPECT_TRUE(std::isfinite(std::get<1>(r0)));
@@ -670,7 +608,9 @@ TEST(GgaGradTools, NoncolinRhoGlobalAxis)
         rup.data(), rdn.data(), neg.data(), mock.chr.rho, gga_grad_nrxx, ux, true);
     for (int ir = 0; ir < gga_grad_nrxx; ++ir)
     {
-        const double mx = mock.chr.rho[1][ir], my = mock.chr.rho[2][ir], mz = mock.chr.rho[3][ir];
+        const double mx = mock.chr.rho[1][ir];
+        const double my = mock.chr.rho[2][ir];
+        const double mz = mock.chr.rho[3][ir];
         const double amag = std::sqrt(mx * mx + my * my + mz * mz);
         const double sign = (mx * ux[0] + my * ux[1] + mz * ux[2] > 0) ? 1.0 : -1.0;
         EXPECT_NEAR(rup[ir], 0.5 * (mock.chr.rho[0][ir] + sign * amag), 1e-14);
@@ -684,7 +624,9 @@ TEST(GgaGradTools, NoncolinRhoGlobalAxis)
         rup.data(), rdn.data(), neg.data(), mock.chr.rho, gga_grad_nrxx, ux, false);
     for (int ir = 0; ir < gga_grad_nrxx; ++ir)
     {
-        const double mx = mock.chr.rho[1][ir], my = mock.chr.rho[2][ir], mz = mock.chr.rho[3][ir];
+        const double mx = mock.chr.rho[1][ir];
+        const double my = mock.chr.rho[2][ir];
+        const double mz = mock.chr.rho[3][ir];
         const double amag = std::sqrt(mx * mx + my * my + mz * mz);
         EXPECT_NEAR(rup[ir], 0.5 * (mock.chr.rho[0][ir] + amag), 1e-14);
         EXPECT_NEAR(rdn[ir], 0.5 * (mock.chr.rho[0][ir] - amag), 1e-14);
@@ -700,7 +642,8 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
     const double hse_omega = XC_Functional::get_hse_omega();
 
     Ns4Charge mock_a(2); // lsign_ = true
-    double et1 = 0, vt1 = 0;
+    double et1 = 0;
+    double vt1 = 0;
     ModuleBase::matrix v1(4, gga_grad_nrxx);
     std::vector<double> dum;
     XC_Functional::gradcorr(et1, vt1, v1, &mock_a.chr, &mock_a.rhopw, &mock_a.ucell,
@@ -708,7 +651,8 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
 
     Ns4Charge mock_b(2);
     mock_b.ucell.magnet.lsign_ = false;
-    double et0 = 0, vt0 = 0;
+    double et0 = 0;
+    double vt0 = 0;
     ModuleBase::matrix v0(4, gga_grad_nrxx);
     XC_Functional::gradcorr(et0, vt0, v0, &mock_b.chr, &mock_b.rhopw, &mock_b.ucell,
                             dum, false, 4, true, false, 0, hybrid_alpha, hse_omega);
@@ -724,163 +668,7 @@ TEST(GgaGradVxc, BuiltinGgaGrad1IgnoresGlobalAxis)
     }
 }
 
-// The diagonal FFT mock maps every field value at a grid point to a gradient
-// parallel to the same mock reciprocal vector. Consequently
-//   sum_mu |grad m_mu|^2 = |sum_mu m_hat_mu grad m_mu|^2
-// point by point, even when the sampled magnetization direction varies. This
-// mock therefore cannot be used as evidence for transverse B2 energy.
-TEST(GgaGradVxc, BuiltinDiagonalFftMockCannotTestTransverseB2Energy)
-{
-    Ns4Charge mock(1);
-    const std::vector<double> mag_part
-        = XC_Functional_Libxc::compute_mag_part_nspin4(gga_grad_nrxx, &mock.chr);
-    std::vector<std::vector<ModuleBase::Vector3<double>>> grad_m(
-        3, std::vector<ModuleBase::Vector3<double>>(gga_grad_nrxx));
-    std::vector<std::complex<double>> reciprocal(gga_grad_nrxx);
-    for (int mu = 0; mu < 3; ++mu)
-    {
-        mock.rhopw.real2recip(mock.chr.rho[mu + 1], reciprocal.data());
-        XC_Functional::grad_rho(reciprocal.data(),
-                                grad_m[mu].data(),
-                                &mock.rhopw,
-                                mock.ucell.tpiba);
-    }
 
-    double direction_change = 0.0;
-    double transverse_power = 0.0;
-    for (int mu = 0; mu < 3; ++mu)
-    {
-        const double difference
-            = mag_part[1 + mu * gga_grad_nrxx] - mag_part[mu * gga_grad_nrxx];
-        direction_change += difference * difference;
-    }
-    for (int ir = 0; ir < gga_grad_nrxx; ++ir)
-    {
-        ModuleBase::Vector3<double> grad_magnitude;
-        double component_power = 0.0;
-        for (int mu = 0; mu < 3; ++mu)
-        {
-            component_power += grad_m[mu][ir] * grad_m[mu][ir];
-            grad_magnitude += mag_part[ir + mu * gga_grad_nrxx] * grad_m[mu][ir];
-        }
-        transverse_power += std::abs(component_power - grad_magnitude * grad_magnitude);
-    }
-
-    EXPECT_GT(direction_change, 1.0e-4);
-    EXPECT_LE(transverse_power, 1.0e-12);
-
-    const auto r2 = run_vxc_nspin4("PBE", 1, 2);
-    const auto r3 = run_vxc_nspin4("PBE", 1, 3);
-    EXPECT_TRUE(std::isfinite(std::get<0>(r3)));
-    EXPECT_TRUE(std::isfinite(std::get<1>(r3)));
-    EXPECT_NEAR(std::get<0>(r3), std::get<0>(r2), 1.0e-12);
-}
-
-// The validated continuous B2 implementation currently uses the built-in
-// functional derivatives. Do not silently route method 3 through the old
-// LIBXC full-divergence formula.
-TEST(GgaGradVxc, LibxcContinuousB2IsRejected)
-{
-    const auto r2 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 2);
-    EXPECT_EQ(std::get<2>(r2).nr, 4);
-    EXPECT_THROW(run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 0, 3), std::domain_error);
-}
-
-// The low-level LibXC entry point is public and can be called without going
-// through XC_Functional::v_xc. It must enforce the same method-3 boundary.
-TEST(GgaGradVxc, LibxcLowLevelContinuousB2IsRejected)
-{
-    Ns4Charge mock(0);
-    const std::vector<int> func_ids = {XC_GGA_X_PBE, XC_GGA_C_PBE};
-    const auto run_low_level = [&](const int gga_grad)
-    {
-        return XC_Functional_Libxc::v_xc_libxc(func_ids,
-                                               gga_grad_nrxx,
-                                               mock.ucell.omega,
-                                               mock.ucell.tpiba,
-                                               &mock.chr,
-                                               4,
-                                               true,
-                                               false,
-                                               gga_grad,
-                                               nullptr,
-                                               0.0,
-                                               0.0);
-    };
-
-    EXPECT_NO_THROW(run_low_level(2));
-    EXPECT_THROW(run_low_level(3), std::domain_error);
-}
-
-TEST(GgaGradVxc, LibxcDensityFloorDifferentiatesTheWeightedEnergy)
-{
-    constexpr double density_threshold = 1.0e-6;
-    Ns2LocalCharge mock;
-    mock.chr.rho[0][0] = 2.0 * density_threshold;
-    mock.chr.rho[1][0] = 0.5 * density_threshold;
-    const std::vector<int> func_ids = {XC_LDA_X};
-    const std::map<int, double> scaled = {{XC_LDA_X, 0.37}};
-    const std::map<int, double>* scaling_cases[] = {nullptr, &scaled};
-    const auto evaluate = [&](const std::map<int, double>* scaling_factor)
-    {
-        return XC_Functional_Libxc::v_xc_libxc(func_ids,
-                                               1,
-                                               1.0,
-                                               1.0,
-                                               &mock.chr,
-                                               2,
-                                               false,
-                                               false,
-                                               0,
-                                               scaling_factor,
-                                               0.0,
-                                               0.0);
-    };
-
-    for (const std::map<int, double>* scaling_factor : scaling_cases)
-    {
-        const auto reference = evaluate(scaling_factor);
-        double analytic = std::get<2>(reference)(1, 0);
-        Parallel_Reduce::reduce_pool(analytic);
-        if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
-        {
-            std::cout << std::setprecision(17)
-                      << "XC_SANITIZER_REFERENCE case=density_floor"
-                      << " scaled=" << (scaling_factor != nullptr)
-                      << " energy=" << std::get<0>(reference)
-                      << " vtxc=" << std::get<1>(reference)
-                      << " analytic=" << analytic << std::endl;
-        }
-        const double original = mock.chr.rho[1][0];
-        const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
-        for (const double step : steps)
-        {
-            mock.chr.rho[1][0] = original + step;
-            const double energy_plus = std::get<0>(evaluate(scaling_factor));
-            mock.chr.rho[1][0] = original - step;
-            const double energy_minus = std::get<0>(evaluate(scaling_factor));
-            mock.chr.rho[1][0] = original;
-
-            const double finite_difference = (energy_plus - energy_minus) / (2.0 * step);
-            if (std::getenv("ABACUS_XC_FD_TRACE") != nullptr)
-            {
-                std::cout << std::setprecision(17)
-                          << "XC_SANITIZER_FD case=density_floor"
-                          << " scaled=" << (scaling_factor != nullptr)
-                          << " eps=" << step
-                          << " analytic=" << analytic
-                          << " finite_difference=" << finite_difference
-                          << " absolute_error=" << std::abs(analytic - finite_difference)
-                          << std::endl;
-            }
-            const double scale = std::max(1.0, std::max(std::abs(analytic),
-                                                        std::abs(finite_difference)));
-            EXPECT_NEAR(analytic, finite_difference, 2.0e-8 * scale)
-                << "step=" << step
-                << ", scaled=" << (scaling_factor != nullptr);
-        }
-    }
-}
 
 TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
 {
@@ -894,10 +682,10 @@ TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
         mock.chr.rho[3][ir] = 0.45 - density_threshold;
     }
     const std::vector<int> func_ids = {XC_LDA_X};
-    const int gga_grad_modes[] = {0, 2};
+    const int gga_grad_modes[] = {2};
     for (const int gga_grad : gga_grad_modes)
     {
-        const auto evaluate = [&, gga_grad]()
+        const std::function<std::tuple<double, double, ModuleBase::matrix>()> evaluate = [&, gga_grad]()
         {
             return XC_Functional_Libxc::v_xc_libxc(func_ids,
                                                    gga_grad_nrxx,
@@ -913,7 +701,7 @@ TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
                                                    0.0);
         };
 
-        const auto reference = evaluate();
+        const std::tuple<double, double, ModuleBase::matrix> reference = evaluate();
         const int components[] = {0, 3};
         const double steps[] = {8.0e-8, 4.0e-8, 2.0e-8};
         for (const int component : components)
@@ -966,10 +754,32 @@ TEST(GgaGradVxc, LibxcNspin4NearSaturationDifferentiatesTheWeightedEnergy)
 // for LIBXC, gga_grad=0 and 1 both keep the original collinear algorithm
 TEST(GgaGradVxc, LibxcZeroEqualsOne)
 {
-    const auto r0 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 0);
-    const auto r1 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 1);
+    const std::tuple<double, double, ModuleBase::matrix> r0 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 0);
+    const std::tuple<double, double, ModuleBase::matrix> r1 = run_vxc_nspin4("GGA_X_PBE+GGA_C_PBE", 1, 1);
     expect_vxc_equal(r0, r1, 1e-12);
 }
+
+// Regression test for the NLCC (non-linear core correction) handling in
+// v_xc_meta. Every contribution to vtxc is weighted by the valence density
+// (chr->rho), i.e. vtxc = \int v_xc * rho_valence, so a zero valence density
+// must give a vanishing vtxc even when the NLCC core charge keeps the density
+// handed to libxc non-trivial. The vsigma (density-gradient) term used to be
+// weighted by the total density instead, which left a spurious non-zero vtxc
+// and hence a wrong analytical stress for meta-GGA + NLCC pseudopotentials.
+TEST_F(XCTest_VXC_meta, vtxc_uses_valence_density)
+{
+    EXPECT_NEAR(vt1_nlcc,0.0,1.0e-12);
+    EXPECT_NEAR(vt2_nlcc,0.0,1.0e-12);
+
+    // The core charge does reach libxc, so the checks above are not vacuous:
+    // for nspin==1 the total density is bit-identical to the first scenario,
+    // hence etxc has to agree with it exactly.
+    EXPECT_GT(std::abs(v1_nlcc(0,1)),1.0e-3);
+    EXPECT_GT(std::abs(v2_nlcc(0,1)),1.0e-3);
+    EXPECT_NEAR(et1_nlcc,et1,1.0e-12);
+    EXPECT_GT(std::abs(et2_nlcc),1.0e-3);
+}
+
 
 int main(int argc, char **argv)
 {

@@ -9,7 +9,7 @@
 #include "source_estate/module_dm/density_matrix.h"    // mohan add 2025-11-04
 #include "source_hamilt/module_surchem/surchem.h"       // use surchem (for dH veff pots)
 #include "source_lcao/hamilt_lcao.h"                   // use hamilt::HamiltLCAO<TK, TR>
-#include "source_lcao/module_dftu/dftu_nao.h"              // mohan add 20251107
+#include "source_pw/module_pwdft/dftu_base.h"              // Plus_U_Base, mohan add 20251107
 #include "source_lcao/module_rdmft/rdmft.h"            // use RDMFT codes
 #include "source_lcao/setup_deepks.h"                  // for deepks, mohan add 20251008
 #include "source_lcao/setup_exx.h"                     // for exx, mohan add 20251008
@@ -26,12 +26,12 @@ void ctrl_scf_lcao(UnitCell& ucell,
                    const Input_para& inp,
                    K_Vectors& kv,
                    elecstate::ElecState* pelec,
-                   elecstate::DensityMatrix<TK, double>* dm, // mohan add 2025-11-04
+                   module_dm::DensityMatrix<TK, double>* dm, // mohan add 2025-11-04
                    Parallel_Orbitals& pv,
                    Grid_Driver& gd,
                    psi::Psi<TK>* psi,
                    hamilt::HamiltLCAO<TK, TR>* p_hamilt,
-                   Plus_U& dftu, // mohan add 2025-11-07
+                   Plus_U_Base& dftu, // mohan add 2025-11-07
                    TwoCenterBundle& two_center_bundle,
                    LCAO_Orbitals& orb,
                    const ModulePW::PW_Basis_K* pw_wfc,   // for berryphase

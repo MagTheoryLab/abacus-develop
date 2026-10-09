@@ -14,8 +14,8 @@ class UnitCell;
 namespace DFTU_BASE
 {
 
-/// nested occupation-matrix type used by DFT+U: occ_mat[iat][l][n][spin](m0, m1)
-using OccMatData = std::vector<std::vector<std::vector<std::vector<ModuleBase::matrix>>>>;
+/// nested occupation-matrix type used by DFT+U: occ_mat[iat][l][spin](m0, m1)
+using OccMatData = std::vector<std::vector<std::vector<ModuleBase::matrix>>>;
 
 /// Read the local occupation number matrix from file (rank 0 only).
 ///
@@ -24,7 +24,7 @@ using OccMatData = std::vector<std::vector<std::vector<std::vector<ModuleBase::m
 /// occ_mat_ctrl and init_chg.
 void read_occup_m(const UnitCell& ucell,
                   OccupationMatrix& occ,
-                  const std::vector<int>& orbital_corr,
+                  const std::vector<int>& l_channel,
                   const int occ_mat_ctrl,
                   const std::string& fn,
                   const std::string& init_chg,
@@ -36,7 +36,7 @@ void read_occup_m(const UnitCell& ucell,
 /// Implemented in dftu_base_io.cpp (only available in MPI builds).
 void local_occup_bcast(const UnitCell& ucell,
                        OccupationMatrix& occ,
-                       const std::vector<int>& orbital_corr,
+                       const std::vector<int>& l_channel,
                        int nspin,
                        int npol);
 

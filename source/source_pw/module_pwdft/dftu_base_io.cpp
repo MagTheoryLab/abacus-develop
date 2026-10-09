@@ -94,7 +94,7 @@ namespace DFTU_BASE
 
 void read_occup_m(const UnitCell& ucell,
                   OccupationMatrix& occ,
-                  const std::vector<int>& orbital_corr,
+                  const std::vector<int>& l_channel,
                   const int occ_mat_ctrl,
                   const std::string& fn,
                   const std::string& init_chg,
@@ -167,12 +167,18 @@ void read_occup_m(const UnitCell& ucell,
             ifdftu >> zeta;
             ifdftu.ignore(150, '\n');
 
+            if (zeta != 0)
+            {
+                ModuleBase::WARNING_QUIT("DFTU_BASE::read_occup_m",
+                                         "only the first radial channel (ORBITAL=0) is supported");
+            }
+
             T = ucell.iat2it[iat];
             const int NL = ucell.atoms[T].nwl + 1;
 
             for (int l = 0; l < NL; l++)
             {
-                if (l != orbital_corr[T])
+                if (l != l_channel[T])
                 {
                     continue;
                 }
@@ -194,7 +200,7 @@ void read_occup_m(const UnitCell& ucell,
                                 for (int m1 = 0; m1 < 2 * L + 1; m1++)
                                 {
                                     ifdftu >> value;
-                                    occ.set(iat, L, zeta, spin, m0, m1, value);
+                                    occ.set(iat, L, spin, m0, m1, value);
                                 }
                                 ifdftu.ignore(150, '\n');
                             }
@@ -220,7 +226,7 @@ void read_occup_m(const UnitCell& ucell,
                                 {
                                     int m1_all = m1 + (2 * L + 1) * ipol1;
                                     ifdftu >> value;
-                                    occ.set(iat, L, zeta, 0, m0_all, m1_all, value);
+                                    occ.set(iat, L, 0, m0_all, m1_all, value);
                                 }
                             }
                             ifdftu.ignore(150, '\n');
@@ -253,7 +259,7 @@ void read_occup_m(const UnitCell& ucell,
 /// element.
 void local_occup_bcast(const UnitCell& ucell,
                        OccupationMatrix& occ,
-                       const std::vector<int>& orbital_corr,
+                       const std::vector<int>& l_channel,
                        int nspin,
                        int npol)
 {
@@ -261,7 +267,7 @@ void local_occup_bcast(const UnitCell& ucell,
 
     for (int T = 0; T < ucell.ntype; T++)
     {
-        if (orbital_corr[T] == -1)
+        if (l_channel[T] == -1)
         {
             continue;
         }
@@ -269,35 +275,27 @@ void local_occup_bcast(const UnitCell& ucell,
         for (int I = 0; I < ucell.atoms[T].na; I++)
         {
             const int iat = ucell.itia2iat(T, I);
-            const int L = orbital_corr[T];
+            const int L = l_channel[T];
 
             for (int l = 0; l <= ucell.atoms[T].nwl; l++)
             {
-                if (l != orbital_corr[T])
+                if (l != l_channel[T])
                 {
                     continue;
                 }
 
-                for (int n = 0; n < ucell.atoms[T].l_nchi[l]; n++)
+                if (nspin == 1 || nspin == 2)
                 {
-                    if (n != 0)
+                    for (int spin = 0; spin < 2; spin++)
                     {
-                        continue;
+                        Parallel_Common::bcast_double(occ.mat(iat, l, spin).c,
+                                                      occ.mat(iat, l, spin).nr * occ.mat(iat, l, spin).nc);
                     }
-
-                    if (nspin == 1 || nspin == 2)
-                    {
-                        for (int spin = 0; spin < 2; spin++)
-                        {
-                            Parallel_Common::bcast_double(occ.mat(iat, l, n, spin).c,
-                                                          occ.mat(iat, l, n, spin).nr * occ.mat(iat, l, n, spin).nc);
-                        }
-                    }
-                    else if (nspin == 4) // SOC
-                    {
-                        Parallel_Common::bcast_double(occ.mat(iat, l, n, 0).c,
-                                                      occ.mat(iat, l, n, 0).nr * occ.mat(iat, l, n, 0).nc);
-                    }
+                }
+                else if (nspin == 4) // SOC
+                {
+                    Parallel_Common::bcast_double(occ.mat(iat, l, 0).c,
+                                                  occ.mat(iat, l, 0).nr * occ.mat(iat, l, 0).nc);
                 }
             }
         }
@@ -328,9 +326,9 @@ void output(const Plus_U_Base& dftu,
         {
             const int N = ucell.atoms[T].l_nchi[L];
 
-            if (L >= dftu.get_orbital_corr(T) && dftu.has_correlated_orbital(T))
+            if (L >= dftu.get_l_channel(T) && dftu.has_l_channel(T))
             {
-                if (L != dftu.get_orbital_corr(T))
+                if (L != dftu.get_l_channel(T))
                 {
                     continue;
                 }
@@ -342,18 +340,11 @@ void output(const Plus_U_Base& dftu,
                 }
                 else
                 {
-                    for (int n = 0; n < N; n++)
-                    {
-                        if (n != 0)
-                        {
-                            continue;
-                        }
-                        double Ueff = (dftu.yukawa().get_U(T, L, n) - dftu.yukawa().get_J(T, L, n)) * ModuleBase::Ry_to_eV;
-                        GlobalV::ofs_running << " Type=" << T+1 << " L=" << L << "  ORBITAL=" << n
-                                             << " U=" << dftu.yukawa().get_U(T, L, n) * ModuleBase::Ry_to_eV << " eV"
-                                             << " J=" << dftu.yukawa().get_J(T, L, n) * ModuleBase::Ry_to_eV << " eV"
-                                             << std::endl;
-                    }
+                    double Ueff = (dftu.yukawa().get_U(T, L) - dftu.yukawa().get_J(T, L)) * ModuleBase::Ry_to_eV;
+                    GlobalV::ofs_running << " Type=" << T+1 << " L=" << L << "  ORBITAL=" << 0
+                                         << " U=" << dftu.yukawa().get_U(T, L) * ModuleBase::Ry_to_eV << " eV"
+                                         << " J=" << dftu.yukawa().get_J(T, L) * ModuleBase::Ry_to_eV << " eV"
+                                         << std::endl;
                 }
             }
         }
@@ -399,12 +390,12 @@ void write_occup_m(const Plus_U_Base& dftu,
 
     for (int T = 0; T < ucell.ntype; T++)
     {
-        if (!dftu.has_correlated_orbital(T))
+        if (!dftu.has_l_channel(T))
         {
             continue;
         }
         const int NL = ucell.atoms[T].nwl + 1;
-        const int LC = dftu.get_orbital_corr(T);
+        const int LC = dftu.get_l_channel(T);
 
         for (int I = 0; I < ucell.atoms[T].na; I++)
         {
@@ -412,126 +403,116 @@ void write_occup_m(const Plus_U_Base& dftu,
 
             for (int l = 0; l < NL; l++)
             {
-                if (l != dftu.get_orbital_corr(T))
+                if (l != dftu.get_l_channel(T))
                 {
                     continue;
                 }
 
-                const int N = ucell.atoms[T].l_nchi[l];
+                ofs << "\n Atom= " << iat+1;
+                ofs << " L= " << l;
+                ofs << " ORBITAL= " << 0 << std::endl;
 
-                for (int n = 0; n < N; n++)
+                if (nspin == 1 || nspin == 2)
                 {
-                    if (n != 0)
+                    double sum0[2];
+                    for (int is = 0; is < 2; is++)
                     {
-                        continue;
-                    }
-
-                    ofs << "\n Atom= " << iat+1;
-                    ofs << " L= " << l;
-                    ofs << " ORBITAL= " << n << std::endl;
-
-                    if (nspin == 1 || nspin == 2)
-                    {
-                        double sum0[2];
-                        for (int is = 0; is < 2; is++)
+                        if (diag)
                         {
-                            if (diag)
-                            {
-                                std::vector<std::vector<double>> A(2 * l + 1, std::vector<double>(2 * l + 1));
-                                for (int m0 = 0; m0 < 2 * l + 1; m0++)
-                                {
-                                    for (int m1 = 0; m1 < 2 * l + 1; m1++)
-                                    {
-                                        A[m0][m1] = dftu.occmat().get(iat, l, n, is, m0, m1);
-                                    }
-                                }
-                                std::vector<double> eigenvalues = CalculateEigenvalues(A, 2 * l + 1);
-                                sum0[is] = 0.0;
-                                ofs << " Eigenvalues for spin=" << is+1 << std::endl;
-                                ofs << std::setprecision(8) << std::fixed;
-                                for (int i = 0; i < 2 * l + 1; i++)
-                                {
-                                    ofs << std::setw(12) << eigenvalues[i];
-                                    sum0[is] += eigenvalues[i];
-                                }
-                                ofs << std::endl;
-                                ofs << " sum is " << std::setw(12) << sum0[is] << std::endl;
-                            }
-                            ofs << " spin= " << is+1 << std::endl;
-                            ofs << std::setprecision(8) << std::fixed;
+                            std::vector<std::vector<double>> A(2 * l + 1, std::vector<double>(2 * l + 1));
                             for (int m0 = 0; m0 < 2 * l + 1; m0++)
                             {
                                 for (int m1 = 0; m1 < 2 * l + 1; m1++)
                                 {
-                                    ofs << std::setw(12)
-                                        << dftu.occmat().get(iat, l, n, is, m0, m1);
+                                    A[m0][m1] = dftu.occmat().get(iat, l, is, m0, m1);
                                 }
-                                ofs << std::endl;
                             }
+                            std::vector<double> eigenvalues = CalculateEigenvalues(A, 2 * l + 1);
+                            sum0[is] = 0.0;
+                            ofs << " Eigenvalues for spin=" << is+1 << std::endl;
+                            ofs << std::setprecision(8) << std::fixed;
+                            for (int i = 0; i < 2 * l + 1; i++)
+                            {
+                                ofs << std::setw(12) << eigenvalues[i];
+                                sum0[is] += eigenvalues[i];
+                            }
+                            ofs << std::endl;
+                            ofs << " sum is " << std::setw(12) << sum0[is] << std::endl;
                         }
-                        if (diag)
+                        ofs << " spin= " << is+1 << std::endl;
+                        ofs << std::setprecision(8) << std::fixed;
+                        for (int m0 = 0; m0 < 2 * l + 1; m0++)
                         {
-                            ofs << std::setw(12) << std::setprecision(8)
-                                << std::fixed << " Magnetism for atom " << iat+1 << ": " << sum0[0] - sum0[1]
-                                << std::endl;
+                            for (int m1 = 0; m1 < 2 * l + 1; m1++)
+                            {
+                                ofs << std::setw(12)
+                                    << dftu.occmat().get(iat, l, is, m0, m1);
+                            }
+                            ofs << std::endl;
                         }
                     }
-                    else if (nspin == 4) // SOC
+                    if (diag)
                     {
-                        if (diag)
-                        {
-                            double sum0[4];
-                            std::vector<std::vector<double>> A(2 * l + 1, std::vector<double>(2 * l + 1));
-                            int index = 0;
-                            for (int is = 0; is < 4; is++)
-                            {
-                                for (int m0 = 0; m0 < 2 * l + 1; m0++)
-                                {
-                                    for (int m1 = 0; m1 < 2 * l + 1; m1++)
-                                    {
-                                        A[m0][m1] = dftu.occmat().get(iat, l, n, 0, m0, m1);
-                                        index++;
-                                    }
-                                }
-                                std::vector<double> eigenvalues = CalculateEigenvalues(A, 2 * l + 1);
-                                sum0[is] = 0.0;
-                                ofs << " Eigenvalues for is=" << is << std::endl;
-                                ofs << std::setprecision(8) << std::fixed;
-                                for (int i = 0; i < 2 * l + 1; i++)
-                                {
-                                    ofs << std::setw(12) << eigenvalues[i];
-                                    sum0[is] += eigenvalues[i];
-                                }
-                                ofs << std::endl;
-                                ofs << " sum is " << std::setw(12) << sum0[is] << std::endl;
-                            }
-                            ofs << std::setw(12) << std::setprecision(8)
-                                << std::fixed << " Magnetism for atom " << iat + 1 << ": "
-                                << sum0[1] << " " << sum0[2] << " " << sum0[3] << std::endl;
-                        }
-                        else
+                        ofs << std::setw(12) << std::setprecision(8)
+                            << std::fixed << " Magnetism for atom " << iat+1 << ": " << sum0[0] - sum0[1]
+                            << std::endl;
+                    }
+                }
+                else if (nspin == 4) // SOC
+                {
+                    if (diag)
+                    {
+                        double sum0[4];
+                        std::vector<std::vector<double>> A(2 * l + 1, std::vector<double>(2 * l + 1));
+                        int index = 0;
+                        for (int is = 0; is < 4; is++)
                         {
                             for (int m0 = 0; m0 < 2 * l + 1; m0++)
                             {
-                                for (int ipol0 = 0; ipol0 < npol; ipol0++)
+                                for (int m1 = 0; m1 < 2 * l + 1; m1++)
                                 {
-                                    const int m0_all = m0 + (2 * l + 1) * ipol0;
-
-                                    for (int m1 = 0; m1 < 2 * l + 1; m1++)
-                                    {
-                                        for (int ipol1 = 0; ipol1 < npol; ipol1++)
-                                        {
-                                            int m1_all = m1 + (2 * l + 1) * ipol1;
-                                            ofs << std::setw(12) << std::setprecision(8) << std::fixed
-                                                << dftu.occmat().get(iat, l, n, 0, m0_all, m1_all);
-                                        }
-                                    }
-                                    ofs << std::endl;
+                                    A[m0][m1] = dftu.occmat().get(iat, l, 0, m0, m1);
+                                    index++;
                                 }
+                            }
+                            std::vector<double> eigenvalues = CalculateEigenvalues(A, 2 * l + 1);
+                            sum0[is] = 0.0;
+                            ofs << " Eigenvalues for is=" << is << std::endl;
+                            ofs << std::setprecision(8) << std::fixed;
+                            for (int i = 0; i < 2 * l + 1; i++)
+                            {
+                                ofs << std::setw(12) << eigenvalues[i];
+                                sum0[is] += eigenvalues[i];
+                            }
+                            ofs << std::endl;
+                            ofs << " sum is " << std::setw(12) << sum0[is] << std::endl;
+                        }
+                        ofs << std::setw(12) << std::setprecision(8)
+                            << std::fixed << " Magnetism for atom " << iat + 1 << ": "
+                            << sum0[1] << " " << sum0[2] << " " << sum0[3] << std::endl;
+                    }
+                    else
+                    {
+                        for (int m0 = 0; m0 < 2 * l + 1; m0++)
+                        {
+                            for (int ipol0 = 0; ipol0 < npol; ipol0++)
+                            {
+                                const int m0_all = m0 + (2 * l + 1) * ipol0;
+
+                                for (int m1 = 0; m1 < 2 * l + 1; m1++)
+                                {
+                                    for (int ipol1 = 0; ipol1 < npol; ipol1++)
+                                    {
+                                        int m1_all = m1 + (2 * l + 1) * ipol1;
+                                        ofs << std::setw(12) << std::setprecision(8) << std::fixed
+                                            << dftu.occmat().get(iat, l, 0, m0_all, m1_all);
+                                    }
+                                }
+                                ofs << std::endl;
                             }
                         }
                     }
-                } // n
+                }
             }     // l
         }         // I
     }             // T

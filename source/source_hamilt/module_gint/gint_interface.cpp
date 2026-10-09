@@ -1,6 +1,5 @@
 #include "gint_interface.h"
 #include "source_base/timer.h"
-#include "source_io/module_parameter/parameter.h"
 #include "gint_vl.h"
 #include "gint_vl_metagga.h"
 #include "gint_vl_nspin4.h"
@@ -36,11 +35,11 @@ const std::complex<double>* cal_spinor_potential(std::vector<const double*> vr_e
                                                  const bool keep_device)
 {
 #ifdef __CUDA
-    if (PARAM.inp.device == "gpu")
+    if (Gint::get_gint_info().use_gpu())
     {
         if (vofk.empty())
         {
-            Gint_vl_nspin4_gpu operation(vr_eff, hR, PARAM.globalv.domag);
+            Gint_vl_nspin4_gpu operation(vr_eff, hR, Gint::get_gint_info().get_domag());
             if (keep_device)
             {
                 return operation.cal_gint_device();
@@ -74,7 +73,7 @@ void cal_gint_vl(
     HContainer<double>* hR)
 {
 #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_vl_gpu gint_vl(vr_eff, hR);
         gint_vl.cal_gint();
@@ -109,7 +108,7 @@ void cal_gint_vl_metagga(
     HContainer<double>* hR)
 {
 #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_vl_metagga_gpu gint_vl_metagga(vr_eff, vfork, hR);
         gint_vl_metagga.cal_gint();
@@ -137,7 +136,7 @@ void cal_gint_rho(
     bool is_dm_symm)
 {
     #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_rho_gpu gint_rho(dm_vec, nspin, rho, is_dm_symm);
         gint_rho.cal_gint();
@@ -167,7 +166,7 @@ void cal_gint_tau(
     double** tau)
 {
     #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_tau_gpu gint_tau(dm_vec, nspin, tau);
         gint_tau.cal_gint();
@@ -189,7 +188,7 @@ void cal_gint_fvl(
     ModuleBase::matrix* svl)
 {
 #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_fvl_gpu gint_fvl_gpu(nspin, vr_eff, dm_vec, isforce, isstress, fvl, svl);
         gint_fvl_gpu.cal_gint();
@@ -212,7 +211,7 @@ void cal_gint_fvl_meta(
     ModuleBase::matrix* svl)
 {
 #ifdef __CUDA
-    if(PARAM.inp.device == "gpu")
+    if(Gint::get_gint_info().use_gpu())
     {
         Gint_fvl_meta_gpu gint_fvl_meta(nspin, vr_eff, vofk, dm_vec, isforce, isstress, fvl, svl);
         gint_fvl_meta.cal_gint();

@@ -3,7 +3,6 @@
 #include "source_base/timer.h"
 #include "source_base/constants.h"
 #include "source_hamilt/module_xc/xc_functional.h"
-#include "source_io/module_parameter/parameter.h"
 
 #ifdef __LIBXC
 #include "source_hamilt/module_xc/libxc_abacus.h"
@@ -17,7 +16,7 @@ void PotXC::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Module
     ModuleBase::TITLE("PotXC", "cal_veff");
     ModuleBase::timer::start("PotXC", "cal_veff");
     const int nrxx_current = chg->nrxx;
-    const int nspin = PARAM.inp.nspin;
+    const int nspin = chg->nspin;
     
     //----------------------------------------------------------
     //  calculate the exchange-correlation potential
@@ -54,9 +53,9 @@ void PotXC::cal_v_eff(const Charge*const chg, const UnitCell*const ucell, Module
         const std::tuple<double, double, ModuleBase::matrix> etxc_vtxc_v
             = XC_Functional::v_xc(nrxx_current, chg, ucell,
                                   nspin,
-                                  PARAM.globalv.domag,
-                                  PARAM.globalv.domag_z,
-                                  PARAM.inp.gga_grad,
+                                  domag_,
+                                  domag_z_,
+                                  gga_grad_,
                                   hybrid_alpha,
                                   hse_omega);
         *(this->etxc_) = std::get<0>(etxc_vtxc_v);

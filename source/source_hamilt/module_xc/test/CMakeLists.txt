@@ -1,3 +1,6 @@
+# Mock-PW tests exercise CPU functional algebra; real-PW tests below retain CUDA.
+abacus_disable_feature_definitions(__CUDA)
+
 AddTest(
   TARGET MODULE_HAMILT_XCTest_PBE
   LIBS parameter MPI::MPI_CXX Libxc::xc
@@ -19,9 +22,6 @@ AddTest(
   ../libxc_gga_wrap.cpp ../libxc_lda_wrap.cpp ../libxc_setup.cpp
 )
 
-if (USE_CUDA)
-list(APPEND FFT_SRC ../../../source_base/module_fft/fft_cuda.cpp)
-endif()
 if (USE_ROCM)
 list(APPEND FFT_SRC ../../../source_base/module_fft/fft_rocm.cpp)
 endif()
@@ -38,6 +38,7 @@ AddTest(
   ../xc_lda_exch.cpp ../xc_hcth.cpp
   ../../../source_base/matrix.cpp
   ../../../source_base/memory_recorder.cpp
+  ../../../source_base/global_variable.cpp
   ../../../source_base/libm/branred.cpp
   ../../../source_base/libm/sincos.cpp
   ../../../source_base/module_external/blas_connector_base.cpp ../../../source_base/module_external/blas_connector_vector.cpp ../../../source_base/module_external/blas_connector_matrix.cpp
@@ -55,14 +56,14 @@ AddTest(
     ../libxc_lda_wrap.cpp
     ../libxc_gga_wrap.cpp
     ../libxc_mgga_wrap.cpp
-    ../xc_gga_corr.cpp ../xc_lda_corr.cpp 
-    ../xc_gga_exch.cpp ../xc_lda_exch.cpp ../xc_hcth.cpp 
+    ../xc_gga_corr.cpp ../xc_lda_corr.cpp
+    ../xc_gga_exch.cpp ../xc_lda_exch.cpp ../xc_hcth.cpp
 )
 
 AddTest(
   TARGET MODULE_HAMILT_XCTest_VXC
   LIBS parameter MPI::MPI_CXX Libxc::xc psi device container
-  SOURCES test_xc5.cpp test_libxc_sanitizer.cpp ../xc_grad.cpp ../xc_grad_prepare.cpp ../xc_grad_kernel.cpp ../xc_grad_assemble.cpp ../xc_grad_wfc.cpp ../xc_grad_utils.cpp ../xc_functional.cpp
+  SOURCES test_xc5.cpp test_libxc_tools.cpp ../xc_grad.cpp ../xc_grad_prepare.cpp ../xc_grad_kernel.cpp ../xc_grad_assemble.cpp ../xc_grad_wfc.cpp ../xc_grad_utils.cpp ../xc_functional.cpp
     ../xc_lda_wrap.cpp ../xc_gga_wrap.cpp
     ../libxc_setup.cpp
     ../libxc_lda_wrap.cpp
@@ -78,6 +79,7 @@ AddTest(
     ../../../source_base/module_external/blas_connector_base.cpp ../../../source_base/module_external/blas_connector_vector.cpp ../../../source_base/module_external/blas_connector_matrix.cpp
     ../../../source_base/matrix.cpp
     ../../../source_base/memory_recorder.cpp
+  ../../../source_base/global_variable.cpp
     ../../../source_base/timer.cpp
     ../../../source_base/libm/branred.cpp
     ../../../source_base/libm/sincos.cpp
@@ -88,18 +90,15 @@ AddTest(
 
 AddTest(
   TARGET MODULE_HAMILT_XCTest_NCGGA_RADIAL
-  SOURCES test_ncgga_radial.cpp ../xc_ncgga_radial.cpp
+  SOURCES test_xc_ncgga_radial.cpp ../xc_ncgga_radial.cpp
 )
 
 AddTest(
   TARGET MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
+  KEEP_FEATURE_DEFINITIONS __CUDA
   LIBS xc_ planewave parameter MPI::MPI_CXX Libxc::xc psi device container base
-  SOURCES test_ncgga_discrete_fd.cpp
+  SOURCES test_xc_functional_ncgga_sf.cpp
 )
-if(USE_CUDA)
-  target_sources(MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD PRIVATE
-    ../xc_functional_ncgga_sf_gpu.cu)
-endif()
 set_tests_properties(
   MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD
   PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1"
@@ -132,9 +131,6 @@ AddTest(
     ../xc_gga_exch.cpp ../xc_lda_exch.cpp ../xc_hcth.cpp
 )
 
-if (USE_CUDA)
-list(APPEND FFT_SRC ../../../source_base/module_fft/fft_cuda.cpp)
-endif()
 if (USE_ROCM)
 list(APPEND FFT_SRC ../../../source_base/module_fft/fft_rocm.cpp)
 endif()
@@ -151,6 +147,7 @@ AddTest(
   ../xc_lda_exch.cpp ../xc_hcth.cpp
   ../../../source_base/matrix.cpp
   ../../../source_base/memory_recorder.cpp
+  ../../../source_base/global_variable.cpp
   ../../../source_base/libm/branred.cpp
   ../../../source_base/libm/sincos.cpp
   ../../../source_base/module_external/blas_connector_base.cpp ../../../source_base/module_external/blas_connector_vector.cpp ../../../source_base/module_external/blas_connector_matrix.cpp
@@ -158,3 +155,35 @@ AddTest(
   ../../../source_base/module_fft/fft_cpu.cpp
   ${FFT_SRC}
 )
+
+# gradcorr dispatches the noncollinear stress path even in focused FFT tests.
+foreach(xc_gradient_test MODULE_HAMILT_XCTest_GRADCORR MODULE_HAMILT_XCTest_LAPL)
+  target_sources(${xc_gradient_test} PRIVATE
+    ../xc_functional_ncgga_sf.cpp ../xc_ncgga_radial.cpp
+    ../libxc_pot.cpp ../libxc_tools.cpp ../../../source_base/timer.cpp)
+endforeach()
+
+AddTest(
+  TARGET MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD
+  KEEP_FEATURE_DEFINITIONS __CUDA
+  LIBS xc_ planewave parameter MPI::MPI_CXX Libxc::xc psi device container base
+  SOURCES test_ncgga_discrete_fd.cpp
+)
+if(USE_CUDA)
+  target_sources(MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD PRIVATE ../xc_functional_ncgga_sf_gpu.cu)
+  target_sources(MODULE_HAMILT_XCTest_NCGGA_DISCRETE_FD PRIVATE ../xc_functional_ncgga_sf_gpu.cu)
+endif()
+set_tests_properties(MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+add_test(NAME MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD_MPI2
+  COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD> ${MPIEXEC_POSTFLAGS})
+set_tests_properties(MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD_MPI2
+  PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1" PROCESSORS 2
+  WORKING_DIRECTORY $<TARGET_FILE_DIR:MODULE_HAMILT_XCTest_NCGGA_GPU_B2_FD>)
+
+if(USE_CUDA)
+  # The shared device library still records GPU allocations, even when the
+  # mock-PW functional tests execute only CPU algebra.
+  set_property(SOURCE ../../../source_base/memory_recorder.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS __CUDA)
+endif()

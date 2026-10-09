@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MODULE_GINT_SPINOR_HR_GPU_H
+#define MODULE_GINT_SPINOR_HR_GPU_H
 
 #include <complex>
 #include <memory>
@@ -34,3 +35,5 @@ class SpinorHrGpu
     std::unique_ptr<Impl> impl_;
 };
 }
+
+#endif

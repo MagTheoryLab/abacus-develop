@@ -1,7 +1,6 @@
 #include "ions_move_basic.h"
 
 #include <algorithm>
-#include "source_io/module_parameter/parameter.h"
 #include "source_base/global_function.h"
 #include "source_base/global_variable.h"
 #include "source_cell/update_cell.h"
@@ -52,7 +51,7 @@ void Ions_Move_Basic::setup_gradient(const UnitCell &ucell, const ModuleBase::ma
     return;
 }
 
-void Ions_Move_Basic::move_atoms(UnitCell &ucell, double *move, double *pos, std::ofstream& ofs)
+void Ions_Move_Basic::move_atoms(UnitCell &ucell, double *move, double *pos, std::ofstream& ofs, const int test_relax_method)
 {
     ModuleBase::TITLE("Ions_Move_Basic", "move_atoms");
 
@@ -62,7 +61,7 @@ void Ions_Move_Basic::move_atoms(UnitCell &ucell, double *move, double *pos, std
     //------------------------
     // for test only
     //------------------------
-    if (PARAM.inp.test_relax_method)
+    if (test_relax_method)
     {
         int iat = 0;
         ofs << "\n movement of ions (unit is Bohr) : " << std::endl;
@@ -108,7 +107,15 @@ void Ions_Move_Basic::move_atoms(UnitCell &ucell, double *move, double *pos, std
     return;
 }
 
-bool Ions_Move_Basic::check_converged(const UnitCell &ucell, const double *grad, int& update_iter, std::ofstream& ofs, std::vector<double>& etot_info)
+bool Ions_Move_Basic::check_converged(const UnitCell &ucell,
+                                      const double *grad,
+                                      int& update_iter,
+                                      std::ofstream& ofs,
+                                      std::vector<double>& etot_info,
+                                      const double& force_thr,
+                                      const double& force_thr_ev,
+                                      const std::string& out_level,
+                                      const int test_relax_method)
 {
     ModuleBase::TITLE("Ions_Move_Basic", "check_converged");
     assert(dim > 0);
@@ -127,7 +134,7 @@ bool Ions_Move_Basic::check_converged(const UnitCell &ucell, const double *grad,
     }
     Ions_Move_Basic::largest_grad /= ucell.lat0;
 
-    if (PARAM.inp.test_relax_method)
+    if (test_relax_method)
     {
         ModuleBase::GlobalFunc::OUT(ofs, "old total energy (ry)", etot_info[1]);
         ModuleBase::GlobalFunc::OUT(ofs, "new total energy (ry)", etot_info[0]);
@@ -136,17 +143,13 @@ bool Ions_Move_Basic::check_converged(const UnitCell &ucell, const double *grad,
         ModuleBase::GlobalFunc::OUT(ofs, "largest gradient (ry/bohr)", Ions_Move_Basic::largest_grad);
     }
 
-    if (PARAM.inp.out_level == "ie")
+    if (out_level == "ie")
     {
         const double ediff = etot_info[0] - etot_info[1];
         std::cout << " ETOT DIFF (eV)       : " << ediff * ModuleBase::Ry_to_eV << std::endl;
         std::cout << " LARGEST GRAD (eV/Angstrom)  : " 
-		<< Ions_Move_Basic::largest_grad * ModuleBase::Ry_to_eV / ModuleBase::BOHR_TO_A
+        << Ions_Move_Basic::largest_grad * ModuleBase::Ry_to_eV / ModuleBase::BOHR_TO_A
                 << std::endl;
-
-        ofs << "\n Largest force is " << largest_grad * ModuleBase::Ry_to_eV / ModuleBase::BOHR_TO_A
-        << " eV/Angstrom while threshold is " 
-        << PARAM.inp.force_thr_ev << " eV/Angstrom" << std::endl;
     }
 
     const double etot_diff = std::abs(etot_info[0] - etot_info[1]);
@@ -155,22 +158,17 @@ bool Ions_Move_Basic::check_converged(const UnitCell &ucell, const double *grad,
 
     if (Ions_Move_Basic::largest_grad == 0.0)
     {
-        ofs << " largest force is 0, no movement is possible." << std::endl;
+        ofs << "\n largest force is 0, no movement is possible." << std::endl;
         ofs << " it may converged, otherwise no movement of atom is allowed." << std::endl;
         return true;
     }
-    else if (etot_diff < etot_thr && Ions_Move_Basic::largest_grad < PARAM.inp.force_thr )
+    else if (etot_diff < etot_thr && Ions_Move_Basic::largest_grad < force_thr )
     {
-        ofs << "\n Ion relaxation is converged!" << std::endl;
-        ofs << "\n Energy difference (Ry) = " << etot_diff << std::endl;
-
         ++update_iter;
         return true;
     }
     else
     {
-        ofs << "\n Ion relaxation is not converged yet (threshold is "
-                             << PARAM.inp.force_thr  * ModuleBase::Ry_to_eV / ModuleBase::BOHR_TO_A << ")" << std::endl;
         return false;
     }
 }
@@ -199,6 +197,7 @@ void Ions_Move_Basic::terminate(const bool converged, const int update_iter, con
     else
     {
         ofs << " the maximum number of steps has been reached." << std::endl;
+        ofs << " Relaxation is not converged after reaching relax_nmax!" << std::endl;
         ofs << " end of geometry optimization." << std::endl;
     }
 

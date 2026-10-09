@@ -5,6 +5,7 @@
 #include <iostream>
 #include <vector>
 #include "ions_move_basic.h"
+#include "relax_criteria.h"
 #include "ions_move_bfgs.h"
 #include "ions_move_cg.h"
 #include "ions_move_sd.h"
@@ -24,7 +25,8 @@ class Ions_Move_Methods
                       const double &etot,
                       UnitCell &ucell,
                       std::ofstream& ofs,
-                      std::vector<std::string>& relax_method);
+                      std::vector<std::string>& relax_method,
+                      const Relax_Criteria& criteria);
     void reset_after_cell_change(const std::vector<std::string>& relax_method, std::ofstream& ofs);
 
     bool get_converged() const
@@ -47,6 +49,41 @@ class Ions_Move_Methods
     int get_update_iter() const
     {
         return update_iter_;
+    }
+
+    //====================================================================
+    // Test seam.
+    //
+    // reset_after_cell_change() is expected to clear the per-run state of
+    // whichever method is active, so the test seeds that state through the
+    // sub-optimiser it belongs to and checks it was cleared. get_converged()
+    // and get_update_iter() above already cover the reads.
+    //
+    // Production code must keep using the private names directly.
+    //====================================================================
+
+    void set_converged(const bool value)
+    {
+        converged_ = value;
+    }
+    void set_update_iter(const int value)
+    {
+        update_iter_ = value;
+    }
+    /// @brief {etot, etot_p} of the current and previous step
+    std::vector<double>& get_etot_info()
+    {
+        return etot_info_;
+    }
+    /// @brief the BFGS optimiser used by relax_method "bfgs"
+    Ions_Move_BFGS& get_bfgs()
+    {
+        return bfgs;
+    }
+    /// @brief the traditional BFGS optimiser used by relax_method "bfgs_trad"
+    Ions_Move_BFGS2& get_bfgs_trad()
+    {
+        return bfgs_trad;
     }
 
   private:

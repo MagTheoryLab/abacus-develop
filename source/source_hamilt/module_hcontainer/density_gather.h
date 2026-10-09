@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MODULE_HCONTAINER_DENSITY_GATHER_H
+#define MODULE_HCONTAINER_DENSITY_GATHER_H
 
 #include <memory>
 
@@ -21,3 +22,5 @@ class DensityGather
     std::unique_ptr<Impl> impl_;
 };
 }
+
+#endif

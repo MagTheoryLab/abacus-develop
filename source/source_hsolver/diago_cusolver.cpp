@@ -33,8 +33,8 @@ DiagoCusolver<T>::~DiagoCusolver()
 // Diagonalization function
 template <typename T>
 void DiagoCusolver<T>::diag(
-    hamilt::MatrixBlock<T>& h_mat,
-    hamilt::MatrixBlock<T>& s_mat,
+    ModuleBase::MatrixBlock<T>& h_mat,
+    ModuleBase::MatrixBlock<T>& s_mat,
     psi::Psi<T>& psi,
     Real* eigenvalue_in)
 {
@@ -53,8 +53,8 @@ void DiagoCusolver<T>::diag(
 
 template <typename T>
 void DiagoCusolver<T>::diag_device(
-    hamilt::MatrixBlock<T>& h_mat,
-    hamilt::MatrixBlock<T>& s_mat,
+    ModuleBase::MatrixBlock<T>& h_mat,
+    ModuleBase::MatrixBlock<T>& s_mat,
     psi::Psi<T, base_device::DEVICE_GPU>& psi,
     Real* eigenvalue_in)
 {

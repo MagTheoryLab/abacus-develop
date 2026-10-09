@@ -14,6 +14,27 @@
 
 namespace
 {
+template <typename Device, typename HAction, typename SAction>
+class TestHSOperator : public hsolver::HSOperator<std::complex<double>, Device>
+{
+  public:
+    TestHSOperator(const HAction& h, const SAction& s) : h_(h), s_(s) {}
+    void update_k(const int) override {}
+    void hpsi(const std::complex<double>* x, std::complex<double>* hx,
+              const int ld, const int count) const override
+    {
+        h_(x, hx, ld, count);
+    }
+    void spsi(const std::complex<double>* x, std::complex<double>* sx,
+              const int ld, const int count) const override
+    {
+        s_(x, sx, ld, count);
+    }
+  private:
+    const HAction& h_;
+    const SAction& s_;
+};
+
 template <typename Device>
 void check_nearly_dependent_corrections(const bool generalized, const bool distributed)
 {
@@ -59,7 +80,7 @@ void check_nearly_dependent_corrections(const bool generalized, const bool distr
         std::fill(psi.begin() + band * stride + dim,
                   psi.begin() + (band + 1) * stride, Complex(123.0, -45.0));
     }
-    const auto h = [&metric, ranks, rank](Complex* in, Complex* out, const int ld, const int count)
+    const auto h = [&metric, ranks, rank](const Complex* in, Complex* out, const int ld, const int count)
     {
         std::vector<Complex> input(ld * count);
         std::vector<Complex> output(ld * count);
@@ -75,7 +96,7 @@ void check_nearly_dependent_corrections(const bool generalized, const bool distr
         base_device::memory::synchronize_memory_op<Complex, Device, base_device::DEVICE_CPU>()(
             out, output.data(), ld * count);
     };
-    const auto s = [&metric](Complex* in, Complex* out, const int ld, const int count)
+    const auto s = [&metric](const Complex* in, Complex* out, const int ld, const int count)
     {
         std::vector<Complex> input(ld * count);
         std::vector<Complex> output(ld * count);
@@ -105,7 +126,8 @@ void check_nearly_dependent_corrections(const bool generalized, const bool distr
                                  container::DeviceTypeToEnum<Device>::value, {bands * stride});
     base_device::memory::synchronize_memory_op<Complex, Device, base_device::DEVICE_CPU>()(
         device_psi.data<Complex>(), psi.data(), bands * stride);
-    solver.diag(h, s, device_psi.data<Complex>(), stride, eigenvalues.data(), thresholds, false);
+    TestHSOperator<Device, decltype(h), decltype(s)> op(h, s);
+    solver.diag(op, device_psi.data<Complex>(), stride, eigenvalues.data(), thresholds, false);
     base_device::memory::synchronize_memory_op<Complex, base_device::DEVICE_CPU, Device>()(
         psi.data(), device_psi.data<Complex>(), bands * stride);
     for (int band = 0; band < bands; ++band)

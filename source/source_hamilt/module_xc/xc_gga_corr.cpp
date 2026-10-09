@@ -238,9 +238,9 @@ void XC_Functional::perdew86_spin(
 
     //SdG: in the original paper 1.745*0.11=0.19195 is used
     double dd = pow((2.0) , third) * sqrt(pow(((1.0 + zeta) * 0.50) , (5.0 / 3.0)) 
-		     + pow(((1.0 - zeta) * 0.50) , (5.0 / 3.0)));
+             + pow(((1.0 - zeta) * 0.50) , (5.0 / 3.0)));
     double ddd = pow((2.0) , (- 4.0 / 3.0)) * 5.0 * (pow(((1.0 + zeta) * 0.50) , (2.0 / 3.0)) 
-		    - pow(((1.0 - zeta) * 0.50) , (2.0 / 3.0))) / (3.0 * dd);
+            - pow(((1.0 - zeta) * 0.50) , (2.0 / 3.0))) / (3.0 * dd);
     double ephi = exp(- phi);
     sc = grho / rho43 * cn * ephi / dd;
     v1cup = sc * ((1.0 + phi) * dcn / cn - ((4.0 / 3.0) -

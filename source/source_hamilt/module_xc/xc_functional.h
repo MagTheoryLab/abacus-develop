@@ -21,6 +21,26 @@
 #include <map> // added by jghan, 2024-10-10
 #include <vector>
 
+
+/**
+ * @brief LibXC runtime settings, injected once at the ESolver boundary.
+ *
+ * Unlike SurchemParameters these initializers are not a copy of any physical INPUT
+ * default: 0.0 and the empty vectors are the neutral "nothing requested" state, and
+ * "default" is the same pre-parse sentinel Input_para uses, which ReadInput resolves
+ * to a real number before it ever reaches here. Keeping it deliberately unparseable
+ * means a missing set_runtime_parameters() fails loudly in std::stod rather than
+ * silently substituting a plausible-looking exchange fraction.
+ */
+struct XCFunctionalParameters
+{
+    double xc_temperature = 0.0;
+    std::vector<std::string> exx_fock_alpha = {"default"};
+    std::vector<std::string> exx_erfc_alpha = {"default"};
+    std::vector<double> xc_exch_ext;
+    std::vector<double> xc_corr_ext;
+};
+
 class XC_Functional
 {
     public:
@@ -74,6 +94,14 @@ class XC_Functional
         return func_type;
     };
 
+    /// @brief Set the functional class directly. set_xc_type() derives this from
+    ///        a functional name and is what production code uses; this is for
+    ///        callers that need to select a branch without configuring libxc.
+    static void set_func_type(const int func_type_in)
+    {
+        func_type = func_type_in;
+    };
+
     static void set_xc_type(const std::string xc_func_in);
 
     // For hybrid functional
@@ -86,6 +114,13 @@ class XC_Functional
 
     static void set_hse_omega(const double omega_in);
 
+    static void set_runtime_parameters(const XCFunctionalParameters& parameters);
+
+    static const XCFunctionalParameters& get_runtime_parameters()
+    {
+        return runtime_parameters;
+    };
+
     static double get_hse_omega()
     {
         return hse_omega;
@@ -94,6 +129,12 @@ class XC_Functional
     static bool get_ked_flag()
     {
         return ked_flag;
+    };
+
+    /// @brief Set whether the functional needs the kinetic energy density.
+    static void set_ked_flag(const bool ked_flag_in)
+    {
+        ked_flag = ked_flag_in;
     };
 
     static bool get_need_laplacian()
@@ -118,6 +159,8 @@ class XC_Functional
 
     // hse_omega for HSE functional:
     static double hse_omega;
+
+    static XCFunctionalParameters runtime_parameters;
 
     // added by jghan, 2024-07-07
     // as a scaling factor for different xc-functionals
@@ -259,6 +302,7 @@ class XC_Functional
         double* dh,
         const ModulePW::PW_Basis* rho_basis,
         const double tpiba);
+
     static void laplacian_rho(
         const std::complex<double>* rhog,
         double* lapl,
@@ -268,7 +312,7 @@ class XC_Functional
     static void noncolin_rho(
         double* rhoout1,
         double* rhoout2,
-        double* neg,
+        double* seg,
         const double* const* const rho,
         const int nrxx,
         const double* ux_,

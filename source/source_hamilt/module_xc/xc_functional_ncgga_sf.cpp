@@ -104,15 +104,9 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
     //   rho_s    = 0.5*(a +/- c)
     //   J_sA     = d rho_s / d(t,m_x,m_y,m_z)_A
     //
-    // Its projected discrete gradients are defined by the same local map:
-    //   g_s = sum_A J_sA G_h(x_A).
-    // This is a definition of the LCA energy graph, not a discrete chain rule
-    // assertion that g_s equals G_h(rho_s).
-    //
-    // For GGA, the sigma = |grad(rho_up)|^2 etc. are computed from gdr1,gdr2,
-    // then passed to spin-polarized XC functionals (xc_spin, gcx_spin, gcc_spin).
-    // The exact reverse contains -D_h(sum_s J_sA h_s) and the local response
-    // of J.  It therefore does not invoke a pointwise product rule for G_h.
+    // The discrete energy uses g_s = G_h(rho_s), with G_h the FFT gradient.
+    // Its exact reverse is sum_s J_sA * (f_rho_s - D_h(h_s)).
+    // No discrete product rule or post-hoc projection of the potential is used.
     //
     // gga_grad=3 instead uses the continuous B2 invariants:
     //   gamma_up/dn = 1/4 (|grad rho|^2 + sum_mu |grad m_mu|^2)
@@ -192,47 +186,45 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
         }
     }
 
-    std::vector<std::complex<double>> rhogsum1(npw), tmp_recip(npw);
-    rhopw->real2recip(chr->rho[0], rhogsum1.data());
-    for (int ig = 0; ig < npw; ++ig)
-        rhogsum1[ig] += chr->rhog_core[ig];
-
-    std::vector<ModuleBase::Vector3<double>> gdr1(nrxx), gdr2(nrxx), grad_rho(nrxx);
+    std::vector<ModuleBase::Vector3<double>> gdr1(nrxx);
+    std::vector<ModuleBase::Vector3<double>> gdr2(nrxx);
+    std::vector<ModuleBase::Vector3<double>> grad_rho(nrxx);
     std::array<std::vector<ModuleBase::Vector3<double>>, 3> grad_m;
-    for (int mu = 0; mu < 3; ++mu)
+    if (gga_grad == 2)
     {
-        grad_m[mu].resize(nrxx);
+        std::vector<std::complex<double>> reciprocal(npw);
+        rhopw->real2recip(rhotmp1.data(), reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(), gdr1.data(), rhopw, tpiba);
+        rhopw->real2recip(rhotmp2.data(), reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(), gdr2.data(), rhopw, tpiba);
     }
-    std::vector<ModuleBase::Vector3<double>> gdr_mag(nrxx);
-    XC_Functional::grad_rho(rhogsum1.data(), gdr1.data(), rhopw, tpiba);
-
-    for (int ir = 0; ir < nrxx; ++ir)
+    else
     {
-        grad_rho[ir] = gdr1[ir];
-        if (gga_grad == 2)
+        std::vector<std::complex<double>> rhogsum1(npw);
+        std::vector<std::complex<double>> tmp_recip(npw);
+        rhopw->real2recip(chr->rho[0], rhogsum1.data());
+        for (int ig = 0; ig < npw; ++ig)
+            rhogsum1[ig] += chr->rhog_core[ig];
+
+        for (int mu = 0; mu < 3; ++mu)
         {
-            gdr1[ir] = spin_map[ir].jacobian(0, 0) * grad_rho[ir];
-            gdr2[ir] = spin_map[ir].jacobian(1, 0) * grad_rho[ir];
+            grad_m[mu].resize(nrxx);
         }
-        else
+        std::vector<ModuleBase::Vector3<double>> gdr_mag(nrxx);
+        XC_Functional::grad_rho(rhogsum1.data(), gdr1.data(), rhopw, tpiba);
+
+        for (int ir = 0; ir < nrxx; ++ir)
         {
+            grad_rho[ir] = gdr1[ir];
             gdr1[ir] = 0.5 * grad_rho[ir];
             gdr2[ir] = 0.5 * grad_rho[ir];
         }
-    }
-    for (int is = 1; is <= 3; ++is)
-    {
-        rhopw->real2recip(chr->rho[is], tmp_recip.data());
-        XC_Functional::grad_rho(tmp_recip.data(), gdr_mag.data(), rhopw, tpiba);
-        grad_m[is - 1] = gdr_mag;
-        for (int ir = 0; ir < nrxx; ++ir)
+        for (int is = 1; is <= 3; ++is)
         {
-            if (gga_grad == 2)
-            {
-                gdr1[ir] += spin_map[ir].jacobian(0, is) * gdr_mag[ir];
-                gdr2[ir] += spin_map[ir].jacobian(1, is) * gdr_mag[ir];
-            }
-            else
+            rhopw->real2recip(chr->rho[is], tmp_recip.data());
+            XC_Functional::grad_rho(tmp_recip.data(), gdr_mag.data(), rhopw, tpiba);
+            grad_m[is - 1] = gdr_mag;
+            for (int ir = 0; ir < nrxx; ++ir)
             {
                 const double mp = mag_part[ir + (is - 1) * nrxx];
                 const ModuleBase::Vector3<double> g = 0.5 * gdr_mag[ir] * mp;
@@ -289,7 +281,7 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
     }
 
     // Step 4: GGA contribution and variational divergence correction.
-    // Method 2 keeps the projected gdr1/gdr2 path; method 3 uses continuous B2.
+    // Method 2 uses the mapped spin-density gradients; method 3 uses continuous B2.
     if (is_gga)
     {
         double etxcgc = 0;
@@ -402,35 +394,17 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
 
         if (gga_grad == 2)
         {
-            // Exact reverse of g_s=sum_A J_sA G_h(x_A):
-            //   v_B = -D_h(sum_s J_sB h_s)
-            //         + sum_s,A dJ_sA/dx_B h_s.G_h(x_A).
-            for (int channel = 0; channel < 4; ++channel)
+            // Reverse G_h(rho_s) first, then the local spin-density map.
+            std::vector<double> dh_down(nrxx);
+            XC_Functional::grad_dot(h1.data(), dh.data(), rhopw, tpiba);
+            XC_Functional::grad_dot(h2.data(), dh_down.data(), rhopw, tpiba);
+            for (int ir = 0; ir < nrxx; ++ir)
             {
-                for (int ir = 0; ir < nrxx; ++ir)
+                for (int channel = 0; channel < 4; ++channel)
                 {
-                    tmp_h[ir]
-                        = spin_map[ir].jacobian(0, channel) * h1[ir]
-                          + spin_map[ir].jacobian(1, channel) * h2[ir];
-                }
-                XC_Functional::grad_dot(tmp_h.data(), dh.data(), rhopw, tpiba);
-                for (int ir = 0; ir < nrxx; ++ir)
-                {
-                    v(channel, ir) -= dh[ir];
-                    if (channel == 0 || spin_map[ir].saturated)
-                    {
-                        continue;
-                    }
-                    const ModuleBase::Vector3<double> spin_flux
-                        = 0.5 * (h1[ir] - h2[ir]);
-                    double local_response = 0.0;
-                    for (int nu = 0; nu < 3; ++nu)
-                    {
-                        local_response
-                            += spin_map[ir].radial.jacobian(nu, channel - 1)
-                               * (spin_flux * grad_m[nu][ir]);
-                    }
-                    v(channel, ir) += local_response;
+                    v(channel, ir)
+                        -= spin_map[ir].jacobian(0, channel) * dh[ir]
+                           + spin_map[ir].jacobian(1, channel) * dh_down[ir];
                 }
             }
         }
@@ -496,55 +470,30 @@ void gradcorr_ncgga_lca_builtin(const Charge* const chr,
     const double e2 = ModuleBase::e2;
     constexpr double epsr = 1.0e-6;
 
-    // Rebuild the same complete local map used by the gga_grad=2 energy:
-    //   rho_s = N_s(n + rho_core, m),
-    //   g_s   = sum_A dN_s/dx_A G_h x_A.
-    // Metric differentiation keeps the real-grid values x_A fixed, so the
-    // map Jacobian is unchanged and every G_h x_A transforms covariantly.
+    // Use exactly the spin-density gradients in the discrete XC energy.
+    // For a metric variation, fixed real-grid spin densities remain fixed.
     std::vector<NcggaSpinMapPoint> spin_map(nrxx);
-    std::array<std::vector<ModuleBase::Vector3<double>>, 4> field_gradient;
-    for (int channel = 0; channel < 4; ++channel)
-    {
-        field_gradient[channel].resize(nrxx);
-    }
-    std::array<std::vector<ModuleBase::Vector3<double>>, 2> spin_gradient;
-    for (int spin = 0; spin < 2; ++spin)
-    {
-        spin_gradient[spin].resize(nrxx);
-    }
-
-    std::vector<std::complex<double>> reciprocal(npw);
-    rhopw->real2recip(chr->rho[0], reciprocal.data());
-    for (int ig = 0; ig < npw; ++ig)
-    {
-        reciprocal[ig] += chr->rhog_core[ig];
-    }
-    XC_Functional::grad_rho(
-        reciprocal.data(), field_gradient[0].data(), rhopw, tpiba);
-
-    for (int channel = 1; channel < 4; ++channel)
-    {
-        rhopw->real2recip(chr->rho[channel], reciprocal.data());
-        XC_Functional::grad_rho(
-            reciprocal.data(), field_gradient[channel].data(), rhopw, tpiba);
-    }
-
     for (int ir = 0; ir < nrxx; ++ir)
     {
         const std::array<double, 3> magnetization
             = {{chr->rho[1][ir], chr->rho[2][ir], chr->rho[3][ir]}};
-        spin_map[ir] = make_ncgga_spin_map_point(
-            chr->rho[0][ir] + chr->rho_core[ir],
-            make_ncgga_radial_point(magnetization, ncgga_lca_radial_eta()));
-        for (int spin = 0; spin < 2; ++spin)
+        const double eta = ncgga_lca_radial_eta();
+        const NcggaRadialPoint radial = make_ncgga_radial_point(magnetization, eta);
+        const double total_density = chr->rho[0][ir] + chr->rho_core[ir];
+        spin_map[ir] = make_ncgga_spin_map_point(total_density, radial);
+    }
+    std::array<std::vector<ModuleBase::Vector3<double>>, 2> spin_gradient;
+    std::vector<double> spin_density(nrxx);
+    std::vector<std::complex<double>> reciprocal(npw);
+    for (int spin = 0; spin < 2; ++spin)
+    {
+        spin_gradient[spin].resize(nrxx);
+        for (int ir = 0; ir < nrxx; ++ir)
         {
-            for (int channel = 0; channel < 4; ++channel)
-            {
-                spin_gradient[spin][ir]
-                    += spin_map[ir].jacobian(spin, channel)
-                       * field_gradient[channel][ir];
-            }
+            spin_density[ir] = spin_map[ir].spin_density[spin];
         }
+        rhopw->real2recip(spin_density.data(), reciprocal.data());
+        XC_Functional::grad_rho(reciprocal.data(), spin_gradient[spin].data(), rhopw, tpiba);
     }
 
     for (int ir = 0; ir < nrxx; ++ir)

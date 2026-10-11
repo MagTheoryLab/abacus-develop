@@ -100,14 +100,13 @@ struct Workspace
     int nrxx = 0;
     int npw = 0;
     double* rho = nullptr;
-    double* field_gradient = nullptr;
-    double* spin_flux = nullptr;
+    double* spin_gradient = nullptr;
+    double* spin_density = nullptr;
     double* h = nullptr;
     double* potential = nullptr;
     double* real_scratch = nullptr;
     double* gcar = nullptr;
     double* reductions = nullptr;
-    thrust::complex<double>* rhog_core = nullptr;
     thrust::complex<double>* reciprocal = nullptr;
     thrust::complex<double>* reciprocal_scratch = nullptr;
 
@@ -119,14 +118,13 @@ struct Workspace
     void release()
     {
         free_device(rho);
-        free_device(field_gradient);
-        free_device(spin_flux);
+        free_device(spin_gradient);
+        free_device(spin_density);
         free_device(h);
         free_device(potential);
         free_device(real_scratch);
         free_device(gcar);
         free_device(reductions);
-        free_device(rhog_core);
         free_device(reciprocal);
         free_device(reciprocal_scratch);
         basis = nullptr;
@@ -150,14 +148,13 @@ struct Workspace
         const std::size_t real_size = static_cast<std::size_t>(nrxx);
         const std::size_t reciprocal_size = static_cast<std::size_t>(npw);
         allocate_device(rho, 5 * real_size);
-        allocate_device(field_gradient, 12 * real_size);
-        allocate_device(spin_flux, 3 * real_size);
+        allocate_device(spin_gradient, 6 * real_size);
+        allocate_device(spin_density, 2 * real_size);
         allocate_device(h, 6 * real_size);
         allocate_device(potential, 4 * real_size);
         allocate_device(real_scratch, real_size);
         allocate_device(gcar, 3 * reciprocal_size);
         allocate_device(reductions, 2);
-        allocate_device(rhog_core, reciprocal_size);
         allocate_device(reciprocal, reciprocal_size);
         allocate_device(reciprocal_scratch, reciprocal_size);
     }
@@ -167,18 +164,6 @@ Workspace& get_workspace()
 {
     static Workspace workspace;
     return workspace;
-}
-
-__global__ void add_reciprocal_kernel(
-    const int count,
-    const thrust::complex<double>* addend,
-    thrust::complex<double>* values)
-{
-    const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < count)
-    {
-        values[index] += addend[index];
-    }
 }
 
 __global__ void reciprocal_gradient_kernel(
@@ -334,7 +319,7 @@ __global__ void pointwise_xc_kernel(
     const int exchange_flag,
     const int correlation_flag,
     const double* rho,
-    const double* field_gradient,
+    const double* spin_gradient,
     double* h,
     double* potential,
     double* etxc)
@@ -353,21 +338,10 @@ __global__ void pointwise_xc_kernel(
             = NcggaRadialMath::make_spin_map_data(total_density, radial);
         double gradient_up[3] = {0.0, 0.0, 0.0};
         double gradient_down[3] = {0.0, 0.0, 0.0};
-        for (int channel = 0; channel < 4; ++channel)
+        for (int component = 0; component < 3; ++component)
         {
-            const double jacobian_up
-                = NcggaRadialMath::spin_map_jacobian(
-                    spin_map, 0, channel);
-            const double jacobian_down
-                = NcggaRadialMath::spin_map_jacobian(
-                    spin_map, 1, channel);
-            for (int component = 0; component < 3; ++component)
-            {
-                const double gradient
-                    = field_gradient[(3 * channel + component) * nrxx + ir];
-                gradient_up[component] += jacobian_up * gradient;
-                gradient_down[component] += jacobian_down * gradient;
-            }
+            gradient_up[component] = spin_gradient[component * nrxx + ir];
+            gradient_down[component] = spin_gradient[(3 + component) * nrxx + ir];
         }
 
         double local_potential[4] = {0.0, 0.0, 0.0, 0.0};
@@ -460,38 +434,6 @@ __global__ void pointwise_xc_kernel(
             h[(3 + component) * nrxx + ir] = h_down[component];
         }
 
-        if (!spin_map.saturated)
-        {
-            double spin_flux[3];
-            for (int component = 0; component < 3; ++component)
-            {
-                spin_flux[component]
-                    = 0.5 * (h_up[component] - h_down[component]);
-            }
-            for (int channel = 1; channel < 4; ++channel)
-            {
-                double local_response = 0.0;
-                for (int nu = 0; nu < 3; ++nu)
-                {
-                    const double h_dot_gradient
-                        = spin_flux[0]
-                              * field_gradient[(3 * (nu + 1)) * nrxx + ir]
-                          + spin_flux[1]
-                                * field_gradient[(3 * (nu + 1) + 1)
-                                                     * nrxx
-                                                 + ir]
-                          + spin_flux[2]
-                                * field_gradient[(3 * (nu + 1) + 2)
-                                                     * nrxx
-                                                 + ir];
-                    local_response
-                        += NcggaRadialMath::radial_jacobian(
-                               radial, nu, channel - 1)
-                           * h_dot_gradient;
-                }
-                local_potential[channel] += local_response;
-            }
-        }
 
         for (int channel = 0; channel < 4; ++channel)
         {
@@ -517,12 +459,10 @@ __global__ void pointwise_xc_kernel(
     }
 }
 
-__global__ void build_spin_flux_kernel(
+__global__ void prepare_spin_density_kernel(
     const int nrxx,
-    const int channel,
     const double* rho,
-    const double* h,
-    double* spin_flux)
+    double* spin_density)
 {
     const int ir = blockIdx.x * blockDim.x + threadIdx.x;
     if (ir >= nrxx)
@@ -530,35 +470,43 @@ __global__ void build_spin_flux_kernel(
         return;
     }
     const double total_density = rho[ir] + rho[4 * nrxx + ir];
+    const double eta = NcggaRadialMath::lca_radial_eta();
     const NcggaRadialMath::RadialData radial
         = NcggaRadialMath::make_radial_data(rho[nrxx + ir],
-                                            rho[2 * nrxx + ir],
-                                            rho[3 * nrxx + ir],
-                                            NcggaRadialMath::lca_radial_eta());
+                                           rho[2 * nrxx + ir],
+                                           rho[3 * nrxx + ir],
+                                           eta);
     const NcggaRadialMath::SpinMapData spin_map
         = NcggaRadialMath::make_spin_map_data(total_density, radial);
-    const double jacobian_up
-        = NcggaRadialMath::spin_map_jacobian(spin_map, 0, channel);
-    const double jacobian_down
-        = NcggaRadialMath::spin_map_jacobian(spin_map, 1, channel);
-    for (int component = 0; component < 3; ++component)
-    {
-        spin_flux[component * nrxx + ir]
-            = jacobian_up * h[component * nrxx + ir]
-              + jacobian_down * h[(3 + component) * nrxx + ir];
-    }
+    spin_density[ir] = spin_map.spin_density[0];
+    spin_density[nrxx + ir] = spin_map.spin_density[1];
 }
 
-__global__ void subtract_divergence_kernel(
+__global__ void pullback_divergence_kernel(
     const int nrxx,
-    const int channel,
+    const int spin,
+    const double* rho,
     const double* divergence,
     double* potential)
 {
     const int ir = blockIdx.x * blockDim.x + threadIdx.x;
-    if (ir < nrxx)
+    if (ir >= nrxx)
     {
-        potential[channel * nrxx + ir] -= divergence[ir];
+        return;
+    }
+    const double total_density = rho[ir] + rho[4 * nrxx + ir];
+    const double eta = NcggaRadialMath::lca_radial_eta();
+    const NcggaRadialMath::RadialData radial
+        = NcggaRadialMath::make_radial_data(rho[nrxx + ir],
+                                           rho[2 * nrxx + ir],
+                                           rho[3 * nrxx + ir],
+                                           eta);
+    const NcggaRadialMath::SpinMapData spin_map
+        = NcggaRadialMath::make_spin_map_data(total_density, radial);
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        const double jacobian = NcggaRadialMath::spin_map_jacobian(spin_map, spin, channel);
+        potential[channel * nrxx + ir] -= jacobian * divergence[ir];
     }
 }
 
@@ -596,23 +544,18 @@ __global__ void vtxc_kernel(
     }
 }
 
-void calculate_field_gradient(Workspace& workspace,
+void calculate_spin_gradient(Workspace& workspace,
                               const int channel,
                               const double tpiba)
 {
     const int reciprocal_blocks
         = (workspace.npw + threads_per_block - 1) / threads_per_block;
-    const double* real_input = workspace.rho + channel * workspace.nrxx;
+    const double* real_input = workspace.spin_density + channel * workspace.nrxx;
     workspace.basis->real2recip_gpu_companion(
         real_input,
         reinterpret_cast<std::complex<double>*>(workspace.reciprocal),
         false,
         1.0);
-    if (channel == 0)
-    {
-        add_reciprocal_kernel<<<reciprocal_blocks, threads_per_block>>>(
-            workspace.npw, workspace.rhog_core, workspace.reciprocal);
-    }
     for (int component = 0; component < 3; ++component)
     {
         reciprocal_gradient_kernel<<<reciprocal_blocks,
@@ -627,7 +570,7 @@ void calculate_field_gradient(Workspace& workspace,
         workspace.basis->recip2real_gpu_companion(
             reinterpret_cast<std::complex<double>*>(
                 workspace.reciprocal_scratch),
-            workspace.field_gradient
+            workspace.spin_gradient
                 + (3 * channel + component) * workspace.nrxx,
             false,
             1.0);
@@ -642,16 +585,10 @@ void apply_divergence(Workspace& workspace,
         = (workspace.nrxx + threads_per_block - 1) / threads_per_block;
     const int reciprocal_blocks
         = (workspace.npw + threads_per_block - 1) / threads_per_block;
-    build_spin_flux_kernel<<<real_blocks, threads_per_block>>>(
-        workspace.nrxx,
-        channel,
-        workspace.rho,
-        workspace.h,
-        workspace.spin_flux);
     for (int component = 0; component < 3; ++component)
     {
         workspace.basis->real2recip_gpu_companion(
-            workspace.spin_flux + component * workspace.nrxx,
+            workspace.h + (3 * channel + component) * workspace.nrxx,
             reinterpret_cast<std::complex<double>*>(workspace.reciprocal),
             false,
             1.0);
@@ -671,9 +608,10 @@ void apply_divergence(Workspace& workspace,
         workspace.real_scratch,
         false,
         1.0);
-    subtract_divergence_kernel<<<real_blocks, threads_per_block>>>(
+    pullback_divergence_kernel<<<real_blocks, threads_per_block>>>(
         workspace.nrxx,
         channel,
+        workspace.rho,
         workspace.real_scratch,
         workspace.potential);
 }
@@ -711,9 +649,6 @@ bool try_v_xc_ncgga_sf_builtin_gpu(
     workspace.ensure(chr->rhopw);
     const std::size_t real_bytes
         = static_cast<std::size_t>(nrxx) * sizeof(double);
-    const std::size_t reciprocal_bytes
-        = static_cast<std::size_t>(workspace.npw)
-          * sizeof(thrust::complex<double>);
     for (int channel = 0; channel < 4; ++channel)
     {
         CHECK_CUDA(cudaMemcpy(workspace.rho + channel * nrxx,
@@ -732,45 +667,37 @@ bool try_v_xc_ncgga_sf_builtin_gpu(
     {
         CHECK_CUDA(cudaMemset(workspace.rho + 4 * nrxx, 0, real_bytes));
     }
-    if (chr->rhog_core != nullptr)
-    {
-        CHECK_CUDA(cudaMemcpy(workspace.rhog_core,
-                              chr->rhog_core,
-                              reciprocal_bytes,
-                              cudaMemcpyHostToDevice));
-    }
-    else
-    {
-        CHECK_CUDA(cudaMemset(workspace.rhog_core, 0, reciprocal_bytes));
-    }
     CHECK_CUDA(cudaMemcpy(
         workspace.gcar,
         reinterpret_cast<const double*>(chr->rhopw->gcar),
         3 * static_cast<std::size_t>(workspace.npw) * sizeof(double),
         cudaMemcpyHostToDevice));
 
-    for (int channel = 0; channel < 4; ++channel)
+    const int real_blocks
+        = (workspace.nrxx + threads_per_block - 1) / threads_per_block;
+    prepare_spin_density_kernel<<<real_blocks, threads_per_block>>>(
+        workspace.nrxx, workspace.rho, workspace.spin_density);
+    CHECK_CUDA(cudaGetLastError());
+    for (int spin = 0; spin < 2; ++spin)
     {
-        calculate_field_gradient(workspace, channel, tpiba);
+        calculate_spin_gradient(workspace, spin, tpiba);
     }
 
     CHECK_CUDA(cudaMemset(workspace.reductions, 0, 2 * sizeof(double)));
-    const int real_blocks
-        = (workspace.nrxx + threads_per_block - 1) / threads_per_block;
     pointwise_xc_kernel<<<real_blocks, threads_per_block>>>(
         workspace.nrxx,
         family.exchange_flag,
         family.correlation_flag,
         workspace.rho,
-        workspace.field_gradient,
+        workspace.spin_gradient,
         workspace.h,
         workspace.potential,
         workspace.reductions);
     CHECK_CUDA(cudaGetLastError());
 
-    for (int channel = 0; channel < 4; ++channel)
+    for (int spin = 0; spin < 2; ++spin)
     {
-        apply_divergence(workspace, channel, tpiba);
+        apply_divergence(workspace, spin, tpiba);
     }
 
     vtxc_kernel<<<real_blocks, threads_per_block>>>(

@@ -903,7 +903,22 @@ class RealPwNcgga : public testing::Test
                 = std::max(1.0,
                            std::max(std::abs(analytic),
                                     std::abs(finite_difference.back())));
-            EXPECT_LE(*std::min_element(errors.begin(), errors.end()), 3.0e-8 * scale);
+            // Radial-eta derivatives need small steps, where subtraction of
+            // extensive XC energies reaches a roundoff floor. Richardson
+            // extrapolation cancels the O(h^2) term before reaching that floor;
+            // retain the same accuracy bound and the central-difference order checks.
+            double best_error = *std::min_element(errors.begin(), errors.end());
+            for (std::size_t ieps = 1; ieps < eps_values.size(); ++ieps)
+            {
+                const double ratio = eps_values[ieps - 1] / eps_values[ieps];
+                const double ratio_squared = ratio * ratio;
+                const double extrapolated
+                    = (ratio_squared * finite_difference[ieps] - finite_difference[ieps - 1])
+                      / (ratio_squared - 1.0);
+                const double extrapolation_error = std::abs(extrapolated - analytic);
+                best_error = std::min(best_error, extrapolation_error);
+            }
+            EXPECT_LE(best_error, 3.0e-8 * scale);
             EXPECT_LE(errors[1], 0.4 * errors[0] + 5.0e-9 * scale);
             EXPECT_LE(errors[2], 0.4 * errors[1] + 5.0e-9 * scale);
             if (is_pool_root())

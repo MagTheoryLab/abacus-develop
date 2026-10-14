@@ -232,11 +232,11 @@ void Numerical_Orbital_Lm::extra_uniform(const double &dr_uniform_in, const bool
     
     this->psi_uniform.resize(nr_uniform,0);
 
-	//----------------------------------------------
-	// calculate the dpsi_uniform
-	//----------------------------------------------
-	this->dpsi_uniform.resize(this->nr_uniform);
-	this->ddpsi_uniform.resize(this->nr_uniform);
+    //----------------------------------------------	 
+    // calculate the dpsi_uniform
+    //----------------------------------------------	 
+    this->dpsi_uniform.resize(this->nr_uniform);
+    this->ddpsi_uniform.resize(this->nr_uniform);
 
     double* y2 = new double[nr];
 
@@ -287,17 +287,19 @@ void Numerical_Orbital_Lm::extra_uniform(const double &dr_uniform_in, const bool
         rad[ir] = ir*dr_uniform;
     }
 
-	//	ModuleBase::Mathzone_Add1::SplineD2 (rad, psi_uniform, nr_uniform, 0.0, 0.0, ddpsi_uniform);
-	double* tmp = new double[nr_uniform];
-	ModuleBase::Mathzone_Add1::Cubic_Spline_Interpolation(ModuleBase::GlobalFunc::VECTOR_TO_PTR(r_radial), ModuleBase::GlobalFunc::VECTOR_TO_PTR(psi), y2,
-			nr, rad, nr_uniform, ModuleBase::GlobalFunc::VECTOR_TO_PTR(psi_uniform),
-            ModuleBase::GlobalFunc::VECTOR_TO_PTR(dpsi_uniform));
+    //	ModuleBase::Mathzone_Add1::SplineD2 (rad, psi_uniform, nr_uniform, 0.0, 0.0, ddpsi_uniform);
+    double* tmp = new double[nr_uniform];
+    const double* radial_data = r_radial.data();
+    const double* psi_data = psi.data();
+    double* psi_uniform_data = psi_uniform.data();
+    double* dpsi_uniform_data = dpsi_uniform.data();
+    ModuleBase::Mathzone_Add1::Cubic_Spline_Interpolation(radial_data, psi_data, y2,
+            nr, rad, nr_uniform, psi_uniform_data, dpsi_uniform_data);
 
-    // Gint's Hermite interpolation needs values and slopes of the same
-    // function. Uni_RadialF values paired with cubic-spline slopes introduce
-    // artificial sub-grid oscillations and break energy/force consistency.
-    // Retain the zero padding outside the orbital support; the spline helper
-    // otherwise extrapolates its final interval into these guard points.
+    // Gint's Hermite interpolation requires values and slopes of the same
+    // radial function. Mixing Uni_RadialF values with cubic-spline slopes
+    // breaks that consistency. Preserve zero padding beyond the support:
+    // the spline helper otherwise extrapolates its final interval.
     for (int ir = 0; ir < nr_uniform; ++ir)
     {
         if (rad[ir] >= rcut)

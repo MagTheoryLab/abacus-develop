@@ -136,7 +136,9 @@ void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
     if (this->method != "pexsi")
     {
         bool used_k_owner_dmr = false;
+#if defined(__CUDA) && defined(__MPI)
         std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>> owner_wfc;
+#endif
     #ifdef __MPI
     #ifdef __CUDA
         if (this->method == "cusolver")

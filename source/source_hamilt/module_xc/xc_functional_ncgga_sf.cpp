@@ -437,7 +437,7 @@ std::tuple<double, double, ModuleBase::matrix> v_xc_ncgga_sf_builtin(
     }
 
     // vtxc uses the same completed four-component potential returned to the
-    // caller.  This unifies the bookkeeping for both modes.
+    // caller, including all four density channels.
     vtxc = 0.0;
     for (int ir = 0; ir < nrxx; ++ir)
     {

@@ -187,7 +187,8 @@ public:
             max_iter,
             comm_info,
             diag_subspace,
-            nb2d
+            nb2d,
+            false
         );
 
         return solver_->diag(

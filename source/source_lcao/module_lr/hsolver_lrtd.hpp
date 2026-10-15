@@ -128,7 +128,8 @@ namespace LR
                         maxiter,
                         comm_info,
                         PARAM.inp.diag_subspace,
-                        PARAM.inp.nb2d);
+                        PARAM.inp.nb2d,
+                        false);
                     std::vector<double> ethr_band(nband, diag_ethr);
                     hsolver::DiagoIterAssist<T>::avg_iter += static_cast<double>(
                         dav_subspace.diag(op, psi, dim, eigenvalue.data(), ethr_band, false /*scf*/));

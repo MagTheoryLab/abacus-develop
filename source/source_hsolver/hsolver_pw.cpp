@@ -296,6 +296,7 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(const HSOperator<T, Device>& op,
     else if (this->method == "dav_subspace")
     {
         bool scf = this->calculation_type == "nscf" ? false : true;
+        const bool overlap_is_identity = !this->use_uspp;
 
         Diago_DavSubspace<T, Device> dav_subspace(pre_condition,
                                                   psi.get_nbands(),
@@ -306,7 +307,8 @@ void HSolverPW<T, Device>::hamiltSolvePsiK(const HSOperator<T, Device>& op,
                                                   this->diag_iter_max,
                                                   comm_info,
                                                   this->diag_subspace,
-                                                  this->nb2d);
+                                                  this->nb2d,
+                                                  overlap_is_identity);
 
         DiagoIterAssist<T, Device>::avg_iter += static_cast<double>(
             dav_subspace.diag(op,

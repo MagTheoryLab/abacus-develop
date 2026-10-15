@@ -33,7 +33,8 @@ class Diago_DavSubspace
                       const int& diag_nmax_in,
                       const diag_comm_info& diag_comm_in,
                       const int diago_dav_method_in,
-                      const int block_size_in);
+                      const int block_size_in,
+                      const bool overlap_is_identity_in);
 
     ~Diago_DavSubspace();
 
@@ -63,6 +64,9 @@ class Diago_DavSubspace
     /// the maximum dimension of the reduced basis set
     const int nbase_x = 0;
 
+    /// Explicit property of the eigenproblem; NC PW has S = I.
+    const bool overlap_is_identity;
+
     /// precondition for diag
     const std::vector<Real>& precondition;
     Real* d_precondition = nullptr;
@@ -75,7 +79,7 @@ class Diago_DavSubspace
     /// the product of H and psi in the reduced basis set
     T* hpsi = nullptr;
 
-    /// the product of S and psi in the reduced basis set
+    /// Aliases psi_in_iter for S = I; otherwise owns S times the basis.
     T* spsi = nullptr;
 
     /// Hamiltonian on the reduced basis

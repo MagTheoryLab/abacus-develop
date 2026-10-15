@@ -35,9 +35,10 @@ Diago_DavSubspace<T, Device>::Diago_DavSubspace(const std::vector<Real>& precond
                                                 const int& diag_nmax_in,
                                                 const diag_comm_info& diag_comm_in,
                                                 const int diag_subspace_in,
-                                                const int diago_subspace_bs_in)
+                                                const int diago_subspace_bs_in,
+                                                const bool overlap_is_identity_in)
     : precondition(precondition_in), n_band(nband_in), dim(nbasis_in), nbase_x(nband_in * david_ndim_in),
-      diag_thr(diag_thr_in), iter_nmax(diag_nmax_in), diag_comm(diag_comm_in),
+      overlap_is_identity(overlap_is_identity_in), diag_thr(diag_thr_in), iter_nmax(diag_nmax_in), diag_comm(diag_comm_in),
         diag_subspace(diag_subspace_in), diago_subspace_bs(diago_subspace_bs_in)
 {
     this->device = base_device::get_device_type(this->ctx);
@@ -60,9 +61,16 @@ Diago_DavSubspace<T, Device>::Diago_DavSubspace(const std::vector<Real>& precond
     resmem_complex_op()(this->hpsi, this->nbase_x * this->dim, "DAV::hpsi");
     setmem_complex_op()(this->hpsi, 0, this->nbase_x * this->dim);
 
-    // the product of S and psi in the reduced psi set
-    resmem_complex_op()(this->spsi, this->nbase_x * this->dim, "DAV::spsi");
-    setmem_complex_op()(this->spsi, 0, this->nbase_x * this->dim);
+    // For NC, keep a single basis: S*psi is exactly psi, including after restart.
+    if (this->overlap_is_identity)
+    {
+        this->spsi = this->psi_in_iter;
+    }
+    else
+    {
+        resmem_complex_op()(this->spsi, this->nbase_x * this->dim, "DAV::spsi");
+        setmem_complex_op()(this->spsi, 0, this->nbase_x * this->dim);
+    }
 
     // Hamiltonian on the reduced psi set
     resmem_complex_op()(this->hcc, this->nbase_x * this->nbase_x, "DAV::hcc");
@@ -94,7 +102,10 @@ Diago_DavSubspace<T, Device>::~Diago_DavSubspace()
     delmem_complex_op()(this->psi_in_iter);
 
     delmem_complex_op()(this->hpsi);
-    delmem_complex_op()(this->spsi);
+    if (!this->overlap_is_identity)
+    {
+        delmem_complex_op()(this->spsi);
+    }
     delmem_complex_op()(this->hcc);
     delmem_complex_op()(this->scc);
     delmem_complex_op()(this->vcc);
@@ -141,7 +152,10 @@ int Diago_DavSubspace<T, Device>::diag_once(const HSOperator<T, Device>& op,
         unconv[m] = m;
     }
 
-    op.spsi(this->psi_in_iter, this->spsi, this->dim, this->notconv);
+    if (!this->overlap_is_identity)
+    {
+        op.spsi(this->psi_in_iter, this->spsi, this->dim, this->notconv);
+    }
     const int initial_rank = this->orthogonalize(0, this->n_band);
     if (initial_rank != this->n_band)
     {
@@ -428,7 +442,10 @@ int Diago_DavSubspace<T, Device>::cal_grad(const HSOperator<T, Device>& op,
                                     (*eigenvalue_iter).data());
     }
 
-    op.spsi(psi_iter + nbase * dim, spsi + nbase * dim, dim, notconv);
+    if (!this->overlap_is_identity)
+    {
+        op.spsi(psi_iter + nbase * dim, spsi + nbase * dim, dim, notconv);
+    }
     const int added = this->orthogonalize(nbase, notconv);
     if (added > 0)
     {
@@ -477,9 +494,12 @@ int Diago_DavSubspace<T, Device>::orthogonalize(const int nbase, const int count
             ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, rank, nbase,
                 this->neg_one, this->psi_in_iter, this->dim, coefficients, nbase,
                 this->one, q, this->dim);
-            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, rank, nbase,
-                this->neg_one, this->spsi, this->dim, coefficients, nbase,
-                this->one, sq, this->dim);
+            if (!this->overlap_is_identity)
+            {
+                ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, rank, nbase,
+                    this->neg_one, this->spsi, this->dim, coefficients, nbase,
+                    this->one, sq, this->dim);
+            }
         }
         ModuleBase::gemm_op<T, Device>()('C', 'N', rank, rank, this->dim,
             this->one, q, this->dim, sq, this->dim, this->zero, coefficients, rank);
@@ -530,10 +550,13 @@ int Diago_DavSubspace<T, Device>::orthogonalize(const int nbase, const int count
                 this->one, q, this->dim, coefficients, rank,
                 this->zero, scratch, this->dim);
             syncmem_complex_op()(q, scratch, this->dim * retained);
-            ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, retained, rank,
-                this->one, sq, this->dim, coefficients, rank,
-                this->zero, scratch, this->dim);
-            syncmem_complex_op()(sq, scratch, this->dim * retained);
+            if (!this->overlap_is_identity)
+            {
+                ModuleBase::gemm_op<T, Device>()('N', 'N', this->dim, retained, rank,
+                    this->one, sq, this->dim, coefficients, rank,
+                    this->zero, scratch, this->dim);
+                syncmem_complex_op()(sq, scratch, this->dim * retained);
+            }
         }
         rank = retained;
     }
@@ -818,27 +841,32 @@ void Diago_DavSubspace<T, Device>::refresh(const int& dim,
     // update hpsi
     syncmem_complex_op()(hpsi, psi_iter + nband * this->dim, this->dim * nband);
 
+    // psi_iter already contains the restarted Ritz vectors. For S = I,
+    // spsi aliases those vectors, so rotating it again would use the new basis.
+    if (!this->overlap_is_identity)
+    {
 #ifdef __DSP
-    ModuleBase::gemm_op_mt<T, Device>()
+        ModuleBase::gemm_op_mt<T, Device>()
 #else
-    ModuleBase::gemm_op<T, Device>()
+        ModuleBase::gemm_op<T, Device>()
 #endif
-        ('N',
-         'N',
-         this->dim,
-         nband,
-         nbase,
-         this->one,
-         this->spsi,
-         this->dim,
-         this->vcc,
-         this->nbase_x,
-         this->zero,
-         psi_iter + nband * this->dim,
-         this->dim);
+            ('N',
+             'N',
+             this->dim,
+             nband,
+             nbase,
+             this->one,
+             this->spsi,
+             this->dim,
+             this->vcc,
+             this->nbase_x,
+             this->zero,
+             psi_iter + nband * this->dim,
+             this->dim);
 
-    // update spsi
-    syncmem_complex_op()(spsi, psi_iter + nband * this->dim, this->dim * nband);
+        // update spsi
+        syncmem_complex_op()(spsi, psi_iter + nband * this->dim, this->dim * nband);
+    }
 
     nbase = nband;
 

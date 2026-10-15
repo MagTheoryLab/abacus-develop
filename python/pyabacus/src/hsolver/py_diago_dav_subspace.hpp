@@ -146,7 +146,8 @@ public:
             max_iter, 
             comm_info,
             diag_subspace,
-            nb2d
+            nb2d,
+            false
         );
 
         return obj->diag(hpsi_func, spsi_func, psi, nbasis, eigenvalue, diag_ethr, scf_type);

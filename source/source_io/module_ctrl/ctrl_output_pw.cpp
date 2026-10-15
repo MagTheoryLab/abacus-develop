@@ -243,9 +243,9 @@ void ModuleIO::ctrl_scf_pw(const int istep,
     if (inp.onsite_radius > 0)
     { // float type has not been implemented
         auto* onsite_p = projectors::OnsiteProjector<double, Device>::get_instance();
-        onsite_p->cal_occupations(reinterpret_cast<psi::Psi<std::complex<double>, Device>*>(stp.template get_psi_t<T, Device>()),
-                                  pelec->wg,
-                                  inp.nspin);
+        auto* wavefunctions = reinterpret_cast<psi::Psi<std::complex<double>, Device>*>(stp.template get_psi_t<T, Device>());
+        ucell.atomic_magnetism.values = onsite_p->cal_occupations(wavefunctions, pelec->wg, inp.nspin);
+        ucell.atomic_magnetism.source = AtomicMagnetism::Source::onsite;
     }
 
     ModuleBase::timer::end("ModuleIO", "ctrl_scf_pw");

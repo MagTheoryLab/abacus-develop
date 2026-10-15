@@ -128,6 +128,14 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
         out_flag = true;
     }
 
+    // Refresh the structure snapshot independently of the file-output cadence.
+    const bool structure_moments = inp.out_stru == 1 && inp.onsite_radius > 0;
+    if (inp.out_mul || structure_moments)
+    {
+        ModuleIO::cal_mag(&pv, p_hamilt, kv, dm, two_center_bundle, orb,
+                         ucell, gd, istep, inp.nspin, out_flag);
+    }
+
     if (!out_flag)
     {
         ModuleBase::timer::end("ModuleIO", "ctrl_scf_lcao");
@@ -559,23 +567,6 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
                                                           &ofs_running,
                                                           GlobalV::MY_RANK);
         mylcalculator.calculate(inp.suffix, global_out_dir, ucell, inp.out_mat_l[1], GlobalV::MY_RANK, istep_in);
-    }
-
-    //------------------------------------------------------------------
-    //! 10) Output Mulliken charge
-    //------------------------------------------------------------------
-    if (inp.out_mul)
-    {
-        ModuleIO::cal_mag(&pv,
-                          p_hamilt,
-                          kv,
-                          dm, // mohan add 2025-11-04
-                          two_center_bundle,
-                          orb,
-                          ucell,
-                          gd,
-                          istep,
-                          true);
     }
 
     //------------------------------------------------------------------

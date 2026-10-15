@@ -54,7 +54,7 @@ namespace relax_stru_io
      *        (out_stru == 2) format.
      *
      * @param ucell Unit cell to write.
-     * @param inp Input parameters (nspin, out_mul, calculation).
+     * @param inp Input parameters (nspin, calculation).
      * @param filename Output file path.
      * @param header Header comment built by build_stru_header.
      * @param force Atomic forces (used for STRU output when has_force is true).

@@ -381,3 +381,35 @@ Rules:
   - `# NOTE: geometry proposed by optimizer but not evaluated; energy N/A; stress N/A; forces omitted`
 - Per-atom `f fx fy fz` fields (forces in eV/Angstrom) are appended to the atom lines only when [`cal_force`](input-main.md#cal_force) is true **and** the geometry was evaluated. They are omitted on early relaxation exit so the geometry and the property data always come from the same configuration.
 - The coordinate format line of the ATOMIC_POSITIONS section is always `Cartesian_angstrom`, independent of force availability; `has_force` only controls the per-atom `f` fields. `Direct` and the other coordinate keywords remain fully supported as **input** formats.
+
+### Atomic magnetic moments in output structures
+
+For magnetic calculations (`nspin=2` or `4`), the NOTE line also identifies
+whether atomic moments were computed for the written geometry. Available
+snapshots carry their definition (`onsite` or `Mulliken`), ionic step and
+`SCF_converged` status. This extends line 7 without adding header lines.
+
+- PW uses the onsite projection when `onsite_radius > 0`.
+- LCAO uses the onsite projection when `onsite_radius > 0`; otherwise it uses
+  Mulliken moments when `out_mul=true`. With both enabled, `mulliken.txt` still
+  reports Mulliken analysis while the STRU snapshot is explicitly labelled
+  `onsite`.
+- The per-atom `mag` field contains the computed moment for both constrained
+  and unconstrained atoms. Output does not change the input STRU or the live
+  constraint target. The input `sc` flags and `lambda` are retained.
+- Per-atom comments preserve `initial_mag`, label the original
+  `constraint_target` for constrained atoms, and record `computed_mag`
+  (in Bohr magnetons). Comments are informational, not additional input fields.
+  If an output STRU is reused as input with spin constraints enabled, its `mag`
+  becomes the new target; use the original input or restore the recorded target
+  to continue with the original constraints.
+- If no atomic analysis was requested, or the final geometry was proposed but
+  never evaluated, `mag` retains the initial/target value and the NOTE line
+  explicitly marks the computed result unavailable. Unconverged electronic
+  results are marked `SCF_converged=false` rather than presented as converged.
+
+Requested snapshots are refreshed on every evaluated ionic step independently
+of `out_freq_ion`; that parameter controls which numbered files are saved.
+For a structure trajectory, set `out_stru=1` and `out_freq_ion=1`.
+Atomic projections and the full-cell spin-density integral have different
+partitioning definitions and need not have equal sums.

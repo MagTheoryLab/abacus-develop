@@ -5,6 +5,16 @@
 #include "source_base/vector3.h"
 #include <vector>
 
+// Output snapshot only: never used as an initial density or constraint target.
+struct AtomicMagnetism
+{
+    enum class Source { unavailable, mulliken, onsite };
+    std::vector<std::vector<double>> values; // [atom][charge, M] or [charge, Mx, My, Mz]
+    Source source = Source::unavailable;
+    int ionic_step = -1; // zero based; -1 means no evaluated frame
+    bool scf_converged = false;
+};
+
 /**
  * @brief Class for magnetism calculations.
  */

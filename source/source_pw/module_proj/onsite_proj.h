@@ -66,7 +66,7 @@ namespace projectors
                     const ModuleBase::matrix& ekb);
         
         /// @brief calculate and print the occupations of all lm orbitals
-        void cal_occupations(const psi::Psi<std::complex<T>, Device>* psi,
+        std::vector<std::vector<double>> cal_occupations(const psi::Psi<std::complex<T>, Device>* psi,
                              const ModuleBase::matrix& wg_in,
                              const int nspin_in);
 

@@ -7,12 +7,14 @@
 #include "source_cell/read_stru.h"
 #include "source_cell/cell_tools.h"
 #include "source_cell/print_cell.h"
+#include "source_cell/read_atoms_helper.h"
 #include "memory"
 #include "source_base/global_variable.h"
 #include "source_base/mathzone.h"
 #include "prepare_unitcell.h"
 #include "source_cell/update_cell.h"
 #include <fstream>
+#include <algorithm>
 #include <cstdio>
 #include <streambuf>
 #include <valarray>
@@ -190,7 +192,10 @@ TEST_F(PrintCellTest, PrintSTRU_nspin2_mulliken)
     ucell->descriptor_file = "__unittest_numerical_descriptor__";
     ucell->orbital_fn[0] = "__unittest_orbital_fn_0__";
     ucell->orbital_fn[1] = "__unittest_orbital_fn_1__";
-    ucell->atom_mulliken = {{-1, 0.5}, {-1, 0.4}, {-1, 0.3}};
+    ucell->atomic_magnetism.source = AtomicMagnetism::Source::mulliken;
+    ucell->atomic_magnetism.ionic_step = 0;
+    ucell->atomic_magnetism.scf_converged = true;
+    ucell->atomic_magnetism.values = {{-1, 0.5}, {-1, 0.4}, {-1, 0.3}};
     unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
                               fn, "", 2, false, true, true, true, 0, ModuleBase::matrix(), false);
     std::ifstream ifs;
@@ -245,7 +250,10 @@ TEST_F(PrintCellTest, PrintSTRU_nspin4_mulliken)
     ucell = utp.SetUcellInfo();
     std::string fn = "C1H2_STRU_nspin4_mulliken";
 
-    ucell->atom_mulliken = {{-1, 0.5, 0.1, 0.2}, {-1, 0.4, 0.3, 0.4}, {-1, 0.3, 0.5, 0.6}};
+    ucell->atomic_magnetism.source = AtomicMagnetism::Source::mulliken;
+    ucell->atomic_magnetism.ionic_step = 0;
+    ucell->atomic_magnetism.scf_converged = true;
+    ucell->atomic_magnetism.values = {{-1, 0.5, 0.1, 0.2}, {-1, 0.4, 0.3, 0.4}, {-1, 0.3, 0.5, 0.6}};
     unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
                               fn, "", 4, false, true, false, false, 0, ModuleBase::matrix(), false);
     std::ifstream ifs;
@@ -389,4 +397,145 @@ TEST_F(PrintCellTest, PrintTauCartesian)
 
     // remove the file
     remove("print_tau_Cartesian");
+}
+
+// The same writer consumes snapshots from both PW and LCAO.
+TEST_F(PrintCellTest, OnsiteSnapshotWritesActualMomentsForConstrainedAtoms)
+{
+    UcellTestPrepare utp = UcellTestLib["C1H2-Index"];
+    ucell = utp.SetUcellInfo();
+    ucell->atomic_magnetism.source = AtomicMagnetism::Source::onsite;
+    ucell->atomic_magnetism.ionic_step = 2;
+    ucell->atomic_magnetism.scf_converged = true;
+    ucell->atomic_magnetism.values = {{0, 0.1, 0.2, 2.3}, {0, 0.4, 0.5, 0.6}, {0, 0.7, 0.8, 0.9}};
+    ucell->atoms[0].m_loc_[0].set(1.123456789, 2.0, 3.0);
+    ucell->atoms[0].constrain[0].set(1, 0, 1);
+    ucell->atoms[0].lambda[0].set(0.0, 0.0, 0.0);
+    const std::string filename = testing::TempDir() + "onsite_snapshot.STRU";
+    const ModuleBase::matrix force;
+    unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
+                             filename, "", 4, false, true, false, false, 0, force, false);
+    std::ifstream file(filename);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    EXPECT_THAT(text, testing::HasSubstr("source=onsite, step=3, SCF_converged=true"));
+    EXPECT_THAT(text, testing::HasSubstr("mag 0.1000 0.2000 2.3000 sc 1 0 1"));
+    EXPECT_THAT(text, testing::HasSubstr("computed_mag 0.1000000000 0.2000000000 2.3000000000"));
+    EXPECT_THAT(text, testing::HasSubstr("mag 0.4000 0.5000 0.6000"));
+    EXPECT_DOUBLE_EQ(ucell->atoms[0].m_loc_[0].z, 3.0);
+    EXPECT_THAT(text, testing::HasSubstr("constraint_target 1.1234567890 2.0000000000 3.0000000000"));
+    EXPECT_DOUBLE_EQ(ucell->atoms[0].m_loc_[0].x, 1.123456789);
+    // Reading the output returns actual moments; target comments are informational.
+    const auto atom_line = text.rfind('\n', text.find(" m ")) + 1;
+    file.clear();
+    file.seekg(atom_line);
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    file >> x >> y >> z;
+    Atom parsed;
+    parsed.vel.resize(1);
+    parsed.mag.resize(1);
+    parsed.m_loc_.resize(1);
+    parsed.angle1.resize(1);
+    parsed.angle2.resize(1);
+    parsed.lambda.resize(1);
+    parsed.constrain.resize(1);
+    ModuleBase::Vector3<int> movement;
+    bool vector_mag = false;
+    bool angle_mag = false;
+    bool zero_element_mag = false;
+    const bool parsed_ok = unitcell::parse_atom_properties(file, parsed, 0, movement,
+                                                         vector_mag, angle_mag, zero_element_mag);
+    EXPECT_TRUE(parsed_ok);
+    EXPECT_DOUBLE_EQ(parsed.m_loc_[0].x, 0.1);
+    EXPECT_DOUBLE_EQ(parsed.m_loc_[0].z, 2.3);
+    EXPECT_EQ(parsed.constrain[0].x, 1);
+    EXPECT_EQ(parsed.constrain[0].y, 0);
+    EXPECT_EQ(parsed.constrain[0].z, 1);
+    file.close();
+    std::remove(filename.c_str());
+}
+
+TEST_F(PrintCellTest, CollinearSnapshotWritesActualConstrainedMoment)
+{
+    UcellTestPrepare utp = UcellTestLib["C1H2-Index"];
+    ucell = utp.SetUcellInfo();
+    ucell->atomic_magnetism.source = AtomicMagnetism::Source::mulliken;
+    ucell->atomic_magnetism.ionic_step = 0;
+    ucell->atomic_magnetism.scf_converged = true;
+    ucell->atomic_magnetism.values = {{0, -0.7}, {0, 0.5}, {0, 0.6}};
+    ucell->atoms[0].mag[0] = 2.5;
+    ucell->atoms[0].constrain[0].set(0, 0, 1);
+    ucell->atoms[0].lambda[0].set(0.0, 0.0, 0.0);
+    const std::string filename = testing::TempDir() + "constrained_collinear_snapshot.STRU";
+    const ModuleBase::matrix force;
+    unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
+                             filename, "", 2, false, true, false, false, 0, force, false);
+    std::ifstream file(filename);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    EXPECT_THAT(text, testing::HasSubstr("mag -0.7000 sc 0 0 1"));
+    EXPECT_THAT(text, testing::HasSubstr("constraint_target 2.5000000000"));
+    EXPECT_DOUBLE_EQ(ucell->atoms[0].mag[0], 2.5);
+    EXPECT_EQ(ucell->atoms[0].constrain[0].z, 1);
+    file.close();
+    std::remove(filename.c_str());
+}
+
+TEST_F(PrintCellTest, InvalidAndUnevaluatedSnapshotsFallBackExplicitly)
+{
+    UcellTestPrepare utp = UcellTestLib["C1H2-Index"];
+    ucell = utp.SetUcellInfo();
+    ucell->atoms[0].mag[0] = 2.5;
+    const std::string filename = testing::TempDir() + "invalid_snapshot.STRU";
+    const ModuleBase::matrix force;
+    for (int scenario = 0; scenario < 3; ++scenario)
+    {
+        ucell->atomic_magnetism.source = AtomicMagnetism::Source::onsite;
+        ucell->atomic_magnetism.ionic_step = 0;
+        ucell->atomic_magnetism.values = {{0, 2.3}, {0, 0.5}, {0, 0.6}};
+        if (scenario == 0)
+        {
+            ucell->atomic_magnetism.values.pop_back(); // incomplete atom set
+        }
+        else if (scenario == 1)
+        {
+            ucell->atomic_magnetism.values[0].resize(1); // wrong spin layout
+        }
+        else
+        {
+            ucell->atomic_magnetism = AtomicMagnetism{}; // proposed, unevaluated geometry
+        }
+        unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
+                                 filename, "", 2, false, true, false, false, 0, force, false);
+        std::ifstream file(filename);
+        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        EXPECT_THAT(text, testing::HasSubstr("computed result unavailable for this geometry"));
+        EXPECT_THAT(text, testing::HasSubstr("mag 2.5000 # initial_mag 2.5000000000"));
+        EXPECT_THAT(text, testing::Not(testing::HasSubstr("; computed_mag")));
+        file.close();
+    }
+    std::remove(filename.c_str());
+}
+
+TEST_F(PrintCellTest, UnconvergedSnapshotIsNotLabelledConverged)
+{
+    UcellTestPrepare utp = UcellTestLib["C1H2-Index"];
+    ucell = utp.SetUcellInfo();
+    ucell->atomic_magnetism.source = AtomicMagnetism::Source::mulliken;
+    ucell->atomic_magnetism.ionic_step = 4;
+    ucell->atomic_magnetism.values = {{0, -0.7}, {0, 0.5}, {0, 0.6}};
+    const std::string filename = testing::TempDir() + "unconverged_snapshot.STRU";
+    const ModuleBase::matrix force;
+    const std::string header = "# version\n# time\n# step\n# stress\n# stress\n# stress\n# NOTE: evaluated\n";
+    unitcell::print_stru_file(*ucell, ucell->atoms, ucell->latvec,
+                             filename, header, 2, false, true, false, false, 0, force, false);
+    std::ifstream file(filename);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const auto species = text.find("ATOMIC_SPECIES");
+    const auto header_end = text.begin() + species;
+    EXPECT_EQ(std::count(text.begin(), header_end, '\n'), 7);
+    EXPECT_THAT(text, testing::HasSubstr("source=Mulliken, step=5, SCF_converged=false"));
+    EXPECT_THAT(text, testing::HasSubstr("mag -0.7000"));
+    file.close();
+    std::remove(filename.c_str());
 }

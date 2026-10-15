@@ -177,6 +177,8 @@ void ESolver_KS::runner(BaseCell& basecell, const int istep)
     ModuleBase::TITLE("ESolver_KS", "runner");
     ModuleBase::timer::start(this->classname, "runner");
 
+    ucell.atomic_magnetism = AtomicMagnetism{};
+
     // 1) before_scf (electronic iteration loops)
     this->before_scf(ucell, istep);
     ModuleBase::GlobalFunc::DONE(GlobalV::ofs_running, "INIT SCF");
@@ -244,6 +246,8 @@ void ESolver_KS::runner(BaseCell& basecell, const int istep)
 
     // 7) after scf
     this->after_scf(ucell, istep, conv_esolver);
+    ucell.atomic_magnetism.ionic_step = istep;
+    ucell.atomic_magnetism.scf_converged = conv_esolver;
     this->conv_esolver = conv_esolver;
 
     ModuleBase::timer::end(this->classname, "runner");

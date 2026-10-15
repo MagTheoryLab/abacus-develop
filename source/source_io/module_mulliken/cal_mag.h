@@ -32,6 +32,7 @@ void cal_mag(Parallel_Orbitals* pv,
              UnitCell& ucell,
              const Grid_Driver& gd,
              const int istep,
+             const int nspin,
              const bool print)
 {
     if (PARAM.inp.out_mul)
@@ -39,14 +40,15 @@ void cal_mag(Parallel_Orbitals* pv,
         auto cell_index
             = CellIndex(unitcell::get_atomLabels(ucell.atoms, ucell.ntype),
 			unitcell::get_atomCounts(ucell.atoms, ucell.ntype),
-			unitcell::get_lnchiCounts(ucell.atoms, ucell.ntype), PARAM.inp.nspin);
-        auto out_s_k = ModuleIO::Output_Sk<TK>(p_ham, pv, PARAM.inp.nspin, kv.get_nks());
-        auto out_dm_k = ModuleIO::Output_DMK<TK>(dm, pv, PARAM.inp.nspin, kv.get_nks());
+			unitcell::get_lnchiCounts(ucell.atoms, ucell.ntype), nspin);
+        auto out_s_k = ModuleIO::Output_Sk<TK>(p_ham, pv, nspin, kv.get_nks());
+        auto out_dm_k = ModuleIO::Output_DMK<TK>(dm, pv, nspin, kv.get_nks());
 
         auto mulp = ModuleIO::Output_Mulliken<TK>(&(out_s_k),
-			&(out_dm_k), pv, &cell_index, kv.isk, PARAM.inp.nspin);
+			&(out_dm_k), pv, &cell_index, kv.isk, nspin);
         auto atom_chg = mulp.get_atom_chg();
-        ucell.atom_mulliken = mulp.get_atom_mulliken(atom_chg);
+        ucell.atomic_magnetism.values = mulp.get_atom_mulliken(atom_chg);
+        ucell.atomic_magnetism.source = AtomicMagnetism::Source::mulliken;
         if (print && GlobalV::MY_RANK == 0)
         {
             cell_index.write_orb_info(PARAM.globalv.global_out_dir);
@@ -54,9 +56,9 @@ void cal_mag(Parallel_Orbitals* pv,
             mulp.print_atom_mag(atom_chg, GlobalV::ofs_running);
         }
     }
-    if (PARAM.inp.onsite_radius > 0)
+    if (PARAM.inp.onsite_radius > 0 && (nspin == 2 || nspin == 4))
     {
-        std::vector<std::vector<double>> atom_mag(ucell.nat, std::vector<double>(PARAM.inp.nspin, 0.0));
+        std::vector<std::vector<double>> atom_mag(ucell.nat, std::vector<double>(nspin, 0.0));
         std::vector<ModuleBase::Vector3<int>> constrain(ucell.nat, ModuleBase::Vector3<int>(1, 1, 1));
         const hamilt::HContainer<double>* dmr = dm->get_dmr_ptr(1);
         std::vector<double> moments;
@@ -65,7 +67,7 @@ void cal_mag(Parallel_Orbitals* pv,
         std::vector<double> mag_z(ucell.nat, 0.0);
         auto atomLabels = unitcell::get_atomLabels(ucell.atoms, ucell.ntype);
 
-        if(PARAM.inp.nspin == 2)
+        if(nspin == 2)
         {
             auto sc_lambda = new hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, double>>(nullptr,
 		kv.kvec_d,
@@ -87,7 +89,7 @@ void cal_mag(Parallel_Orbitals* pv,
                 atom_mag[iat][1] = moments[iat];
             }
         }
-        else if(PARAM.inp.nspin == 4)
+        else if(nspin == 4)
         {
             auto sc_lambda = new hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>(
                 nullptr,
@@ -108,7 +110,8 @@ void cal_mag(Parallel_Orbitals* pv,
                 atom_mag[iat][3] = moments[iat*3+2];
             }
         }
-        ucell.atom_mulliken = atom_mag;
+        ucell.atomic_magnetism.values = std::move(atom_mag);
+        ucell.atomic_magnetism.source = AtomicMagnetism::Source::onsite;
     }
 }
 

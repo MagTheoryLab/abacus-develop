@@ -17,7 +17,7 @@ namespace print {
  * @param iat_nh Number of projectors per atom
  * @param atom_labels Atom labels
  */
-void print_orb_chg(
+std::vector<std::vector<double>> print_orb_chg(
     const UnitCell* ucell,
     const std::vector<std::complex<double>>& occs,
     const std::vector<int>& iat_nh,

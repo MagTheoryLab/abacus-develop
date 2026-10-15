@@ -168,7 +168,7 @@ class UnitCell : public BaseCell {
     /// @name Magnetism
     /// @{
     Magnetism magnet;                               ///< magnetism Yu Liu 2021-07-03
-    std::vector<std::vector<double>> atom_mulliken; ///< [nat][nspin]
+    AtomicMagnetism atomic_magnetism; ///< evaluated per-atom output snapshot
     int n_mag_at = 0;
     /// @}
 

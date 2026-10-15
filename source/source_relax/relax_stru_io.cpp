@@ -19,7 +19,9 @@ std::string build_stru_header(const int istep,
 {
     std::time_t now = std::time(nullptr);
     char time_buf[64];
-    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+    std::tm local_time;
+    localtime_r(&now, &local_time);
+    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &local_time);
 
     const char* final_tag = is_final ? " (FINAL)" : "";
     const double etot_ev = etot * ModuleBase::Ry_to_eV;
@@ -128,7 +130,7 @@ void write_stru(UnitCell& ucell,
                                   header,
                                   inp.nspin,
                                   inp.calculation == "md",
-                                  inp.out_mul,
+                                  true, // use a valid computed snapshot, regardless of out_mul
                                   need_orb,
                                   deepks_setorb,
                                   my_rank,

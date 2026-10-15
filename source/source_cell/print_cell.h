@@ -45,7 +45,7 @@ namespace unitcell
      *
      * @param nspin number of spin channels [in]
      * @param vel true for printing velocities [in]
-     * @param magmom true for printing Mulliken population analysis produced magmom [in]
+     * @param magmom true to use the evaluated atomic-magnetism snapshot; constrained mag remains the target [in]
      * @param orb true for printing NUMERICAL_ORBITAL section [in]
      * @param dpks_desc true for printing NUMERICAL_DESCRIPTOR section [in]
      * @param iproc GlobalV::MY_RANK [in]

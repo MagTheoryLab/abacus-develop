@@ -255,6 +255,11 @@ void Relax_Driver::final_out(const int istep,
                              const bool geometry_evaluated,
                              std::ofstream& ofs_running)
 {
+    if (!geometry_evaluated)
+    {
+        // The optimizer moved the cell after the last electronic calculation.
+        ucell.atomic_magnetism = AtomicMagnetism{};
+    }
     // Structure final output is effective for scf/nscf/relax/cell-relax;
     // relax-specific screen messages remain guarded below.
     const bool is_relax = (inp.calculation == "relax" || inp.calculation == "cell-relax");

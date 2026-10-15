@@ -1,5 +1,6 @@
 #include <regex>
 #include <cassert>
+#include <cmath>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -114,6 +115,47 @@ namespace unitcell
         {
             str = header;
         }
+        const auto& snapshot = ucell.atomic_magnetism;
+        bool computed_mag = magmom && snapshot.source != AtomicMagnetism::Source::unavailable
+                            && snapshot.ionic_step >= 0 && snapshot.values.size() == ucell.nat;
+        for (const auto& atom : snapshot.values)
+        {
+            computed_mag = computed_mag && atom.size() == nspin;
+            for (const double value : atom)
+            {
+                computed_mag = computed_mag && std::isfinite(value);
+            }
+        }
+        if (nspin == 2 || nspin == 4)
+        {
+            std::string magnetic_note;
+            if (computed_mag)
+            {
+                const char* source = snapshot.source == AtomicMagnetism::Source::onsite ? "onsite" : "Mulliken";
+                const char* converged = snapshot.scf_converged ? "true" : "false";
+                const int step = snapshot.ionic_step + 1;
+                magnetic_note = FmtCore::format("Atomic magnetism: source=%s, step=%d, SCF_converged=%s, unit=mu_B",
+                                       source, step, converged);
+                magnetic_note += "; mag uses computed moments for all atoms; original constraint targets are informational comments";
+            }
+            else
+            {
+                magnetic_note = "Atomic magnetism: computed result unavailable for this geometry; mag retains initial/target values";
+            }
+            // Extend the existing NOTE line; preserve the seven-line header contract.
+            if (str.empty())
+            {
+                str = "# " + magnetic_note + "\n";
+            }
+            else
+            {
+                if (str.back() == '\n')
+                {
+                    str.pop_back();
+                }
+                str += "; " + magnetic_note + "\n";
+            }
+        }
         // ATOMIC_SPECIES
         str += "ATOMIC_SPECIES\n";
         for(int it=0; it<ucell.ntype; it++)
@@ -209,26 +251,67 @@ namespace unitcell
                                            force(nat_, 1)*force_conv,
                                            force(nat_, 2)*force_conv);
                 }
+                const auto& constraint = atoms[it].constrain[ia];
+                const bool constrained = constraint.x != 0 || constraint.y != 0 || constraint.z != 0;
                 if (nspin == 2) // output magnetic information
                 {
-                    if (magmom && !ucell.atom_mulliken.empty()) {
-                        str += FmtCore::format(" mag %.4f", ucell.atom_mulliken[nat_][1]);
+                    if (computed_mag) {
+                        str += FmtCore::format(" mag %.4f", snapshot.values[nat_][1]);
                     } else {
-                        str += FmtCore::format(" mag %.4f", atoms[it].mag[ia]);
+                        const char* format = constrained ? " mag %.10f" : " mag %.4f";
+                        str += FmtCore::format(format, atoms[it].mag[ia]);
                     }
                 }
                 else if (nspin == 4) // output magnetic information
                 {
-                    if (magmom && !ucell.atom_mulliken.empty()) {
+                    if (computed_mag) {
                         str += FmtCore::format(" mag %.4f %.4f %.4f",
-                                                ucell.atom_mulliken[nat_][1],
-                                                ucell.atom_mulliken[nat_][2],
-                                                ucell.atom_mulliken[nat_][3]);
+                                                snapshot.values[nat_][1],
+                                                snapshot.values[nat_][2],
+                                                snapshot.values[nat_][3]);
                     } else {
-                        str += FmtCore::format(" mag %.4f %.4f %.4f",
+                        const char* format = constrained ? " mag %.10f %.10f %.10f" : " mag %.4f %.4f %.4f";
+                        str += FmtCore::format(format,
                                                 atoms[it].m_loc_[ia].x,
                                                 atoms[it].m_loc_[ia].y,
                                                 atoms[it].m_loc_[ia].z);
+                    }
+                }
+                if (nspin == 2 || nspin == 4)
+                {
+                    if (constrained)
+                    {
+                        // Preserve input flags and multipliers; mag reports the evaluated result.
+                        str += FmtCore::format(" sc %d %d %d", constraint.x, constraint.y, constraint.z);
+                        const auto lambda_ev = atoms[it].lambda[ia] * ModuleBase::Ry_to_eV;
+                        str += FmtCore::format(" lambda %.10f %.10f %.10f", lambda_ev.x, lambda_ev.y, lambda_ev.z);
+                    }
+                    if (nspin == 2)
+                    {
+                        str += FmtCore::format(" # initial_mag %.10f", atoms[it].mag[ia]);
+                        if (constrained)
+                        {
+                            str += FmtCore::format("; constraint_target %.10f", atoms[it].mag[ia]);
+                        }
+                        if (computed_mag)
+                        {
+                            str += FmtCore::format("; computed_mag %.10f", snapshot.values[nat_][1]);
+                        }
+                    }
+                    else
+                    {
+                        const auto& initial = atoms[it].m_loc_[ia];
+                        str += FmtCore::format(" # initial_mag %.10f %.10f %.10f", initial.x, initial.y, initial.z);
+                        if (constrained)
+                        {
+                            str += FmtCore::format("; constraint_target %.10f %.10f %.10f",
+                                                   initial.x, initial.y, initial.z);
+                        }
+                        if (computed_mag)
+                        {
+                            str += FmtCore::format("; computed_mag %.10f %.10f %.10f",
+                                                   snapshot.values[nat_][1], snapshot.values[nat_][2], snapshot.values[nat_][3]);
+                        }
                     }
                 }
                 str += "\n";

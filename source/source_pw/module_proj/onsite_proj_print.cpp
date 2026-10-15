@@ -4,7 +4,7 @@
 namespace projectors {
 namespace print {
 
-void print_orb_chg(
+std::vector<std::vector<double>> print_orb_chg(
     const UnitCell* ucell,
     const std::vector<std::complex<double>>& occs,
     const std::vector<int>& iat_nh,
@@ -31,6 +31,7 @@ void print_orb_chg(
                    /*indent=*/0, 
                    /*align=*/{/*value*/FmtTable::Align::RIGHT, /*title*/FmtTable::Align::LEFT});
     // parameters for mag output
+    std::vector<std::vector<double>> atom_mag(ucell->nat);
     int occ_index = 0;
     std::vector<std::string> atom_labels_iat(ucell->nat);
     for(int iat=0; iat<ucell->nat; iat++)
@@ -63,6 +64,7 @@ void print_orb_chg(
             }
             occ_index += 4;
         }
+        atom_mag[iat] = sum;
         mag_x[iat] = sum[1];
         mag_y[iat] = sum[2];
         mag_z[iat] = sum[3];
@@ -75,6 +77,7 @@ void print_orb_chg(
     
     // Print magnetism table
     print_mag_table(atom_labels_iat, mag_x, mag_y, mag_z);
+    return atom_mag;
 }
 
 void print_mag_table(

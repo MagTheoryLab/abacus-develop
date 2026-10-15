@@ -54,7 +54,7 @@ void projectors::OnsiteProjector<T, Device>::overlap_proj_psi(
 }
 
 template<typename T, typename Device>
-void projectors::OnsiteProjector<T, Device>::cal_occupations(
+std::vector<std::vector<double>> projectors::OnsiteProjector<T, Device>::cal_occupations(
         const psi::Psi<std::complex<T>, Device>* psi_in,
         const ModuleBase::matrix& wg_in,
         const int nspin_in)
@@ -101,10 +101,19 @@ void projectors::OnsiteProjector<T, Device>::cal_occupations(
     // occ has been reduced and calculate mag
     // Print orbital charge analysis
     auto atom_labels = unitcell::get_atomLabels(this->ucell->atoms, this->ucell->ntype);
-    print::print_orb_chg(this->ucell, occs, this->iat_nh, atom_labels);
+    auto atom_mag = print::print_orb_chg(this->ucell, occs, this->iat_nh, atom_labels);
+    if (nspin_in == 2)
+    {
+        for (auto& atom : atom_mag)
+        {
+            atom[1] = atom[3];
+            atom.resize(2);
+        }
+    }
 
     // print charge
     ModuleBase::timer::end("OnsiteProj", "cal_occupation");
+    return atom_mag;
 }
 
 // explicit method instantiation
@@ -117,7 +126,7 @@ void projectors::OnsiteProjector<double, base_device::DEVICE_CPU>::overlap_proj_
     const int, const std::complex<double>*, const int);
 
 template
-void projectors::OnsiteProjector<double, base_device::DEVICE_CPU>::cal_occupations(
+std::vector<std::vector<double>> projectors::OnsiteProjector<double, base_device::DEVICE_CPU>::cal_occupations(
     const psi::Psi<std::complex<double>, base_device::DEVICE_CPU>*,
     const ModuleBase::matrix&,
     const int);
@@ -132,7 +141,7 @@ void projectors::OnsiteProjector<double, base_device::DEVICE_GPU>::overlap_proj_
     const int, const std::complex<double>*, const int);
 
 template
-void projectors::OnsiteProjector<double, base_device::DEVICE_GPU>::cal_occupations(
+std::vector<std::vector<double>> projectors::OnsiteProjector<double, base_device::DEVICE_GPU>::cal_occupations(
     const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*,
     const ModuleBase::matrix&,
     const int);

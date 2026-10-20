@@ -26,6 +26,7 @@ endif()
 
 install(DIRECTORY support DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
+if(ENABLE_MPI)
 AddTest(
   TARGET MODULE_ESTATE_dm_constructor_test
   LIBS parameter  base device symmetry
@@ -52,9 +53,12 @@ AddTest(
   ${ABACUS_SOURCE_DIR}/source_cell/reciprocal_grid.cpp
 )
 
+endif()
+
+# The calculation fixture initializes both serial and distributed orbital layouts.
 AddTest(
   TARGET MODULE_ESTATE_dm_cal_DMR_test
-  LIBS parameter  base device symmetry
+  LIBS parameter base device symmetry
   SOURCES test_cal_dm_r.cpp ../density_matrix.cpp ../dmr_gamma.cpp ../dmr_init.cpp ../dm_setter.cpp ../dm_getter.cpp ../dm_tools.cpp ../dmr_k.cpp ../dmr_td.cpp ../dmr_full.cpp tmp_mocks.cpp
   ${ABACUS_SOURCE_DIR}/source_hamilt/module_hcontainer/base_matrix.cpp
   ${ABACUS_SOURCE_DIR}/source_hamilt/module_hcontainer/hcontainer.cpp
@@ -65,6 +69,7 @@ AddTest(
   ${ABACUS_SOURCE_DIR}/source_cell/reciprocal_grid.cpp
 )
 
+if(ENABLE_MPI)
 AddTest(
   TARGET MODULE_ESTATE_dm_soc_magnetization_roundtrip_test
   LIBS parameter  base device
@@ -74,3 +79,4 @@ AddTest(
   ${ABACUS_SOURCE_DIR}/source_hamilt/module_hcontainer/atom_pair.cpp
   ${ABACUS_SOURCE_DIR}/source_basis/module_ao/parallel_orbitals.cpp
 )
+endif()

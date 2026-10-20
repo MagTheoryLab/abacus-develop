@@ -273,7 +273,7 @@ void PW_Basis::gpu_fft_forward_from_slabs(std::complex<double>* out,
         return;
     }
 
-    this->gpu_fft_bundle_->fftxyfor(slabs, slabs);
+    this->gpu_fft_bundle_->fftxyfor_device(slabs, slabs);
     pack_fft_slabs_gpu(this->nstot,
                        this->nplane,
                        this->gpu_fft_istot2ixy_,
@@ -301,7 +301,7 @@ void PW_Basis::gpu_fft_forward_from_slabs(std::complex<double>* out,
                           this->gpu_fft_z_local_,
                           this->gpu_fft_recv_,
                           this->gpu_fft_sticks_);
-    this->gpu_fft_bundle_->fftzfor(this->gpu_fft_sticks_,
+    this->gpu_fft_bundle_->fftzfor_device(this->gpu_fft_sticks_,
                                    this->gpu_fft_sticks_);
     set_real_to_recip_output_op<double, base_device::DEVICE_GPU>()(
         this->npw,
@@ -334,7 +334,7 @@ void PW_Basis::gpu_fft_backward_to_slabs(
         this->gpu_fft_sticks_, 0, this->nst * this->nz);
     set_3d_fft_box_op<double, base_device::DEVICE_GPU>()(
         this->npw, this->ig2ixyz_gpu, in, this->gpu_fft_sticks_);
-    this->gpu_fft_bundle_->fftzbac(this->gpu_fft_sticks_,
+    this->gpu_fft_bundle_->fftzbac_device(this->gpu_fft_sticks_,
                                    this->gpu_fft_sticks_);
     pack_fft_sticks_gpu(this->nst,
                         this->nz,
@@ -364,7 +364,7 @@ void PW_Basis::gpu_fft_backward_to_slabs(
                          this->gpu_fft_istot2ixy_,
                          this->gpu_fft_recv_,
                          slabs);
-    this->gpu_fft_bundle_->fftxybac(slabs, slabs);
+    this->gpu_fft_bundle_->fftxybac_device(slabs, slabs);
 }
 
 void PW_Basis::real2recip_gpu_companion(

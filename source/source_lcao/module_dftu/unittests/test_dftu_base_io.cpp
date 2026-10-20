@@ -158,7 +158,7 @@ TEST(DFTUBaseIoTest, LcaoSocReadableRoundTrip)
         }
         data[0][1][0].zero_out();
         const auto& channels = dftu.get_l_channel_vec();
-        DFTU_BASE::read_occup_m(cell, dftu.occmat(), channels, 1, path, "atomic", 4, 2, layout);
+        DFTU_BASE::read_occup_m(cell, dftu.occmat(), channels, path, 4, 2, layout);
         for (int k = 0; k < 36; ++k)
         {
             EXPECT_NEAR(data[0][1][0].c[k], expected[k], 1.1e-8) << "method=" << method << " index=" << k;

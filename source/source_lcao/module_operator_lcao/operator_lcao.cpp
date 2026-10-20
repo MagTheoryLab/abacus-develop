@@ -206,6 +206,11 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
             break;
         }
         case calculation_type::lcao_exx:
+        case calculation_type::lr_dmtrans_hxc:
+        case calculation_type::lr_dmtrans_exx:
+        case calculation_type::lr_dmdiff_hxc:
+        case calculation_type::lr_dmdiff_exx:
+        case calculation_type::lr_dmtrans_gxc:
         {
             // EXX is accumulated in H(R); the last operator-chain node folds
             // the complete H(R) into H(k), including the TD gauge phase.

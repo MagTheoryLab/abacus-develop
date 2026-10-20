@@ -201,6 +201,25 @@ class FFT_Bundle
     template <typename FPTYPE>
     void fft3D_backward(std::complex<FPTYPE>* in, std::complex<FPTYPE>* out) const;
 
+    /// Device-memory slab/stick transforms used by the double-precision GPU companion.
+    /// The unsuffixed interfaces above retain the host-memory fallback.
+    void fftxyfor_device(std::complex<double>* in, std::complex<double>* out) const
+    {
+        fft_double->fftxyfor(in, out);
+    }
+    void fftzfor_device(std::complex<double>* in, std::complex<double>* out) const
+    {
+        fft_double->fftzfor(in, out);
+    }
+    void fftzbac_device(std::complex<double>* in, std::complex<double>* out) const
+    {
+        fft_double->fftzbac(in, out);
+    }
+    void fftxybac_device(std::complex<double>* in, std::complex<double>* out) const
+    {
+        fft_double->fftxybac(in, out);
+    }
+
     /// @brief the device this bundle was configured for, "cpu" or "gpu"
     std::string get_device() const { return device; }
     /// @brief the precision this bundle was configured for, "single" or "double"
@@ -210,8 +229,31 @@ class FFT_Bundle
     int fft_mode = 0;
     bool float_flag = false;
     bool double_flag = false;
+    // Backends selected by `device`: an FFT_CPU instance for "cpu",
+    // FFT_CUDA/FFT_ROCM for "gpu", FFT_DSP for "dsp". They serve the
+    // device-memory ("gpu-like") 3D FFT interface; on "cpu" they also serve
+    // the host-memory ("cpu-like") interface.
     std::shared_ptr<FFT_BASE<float>> fft_float = nullptr;
     std::shared_ptr<FFT_BASE<double>> fft_double = nullptr;
+    // Extra CPU backends serving the host-memory ("cpu-like") interface when
+    // the configured device is not "cpu", since the gpu/dsp backends implement
+    // device-memory FFT interfaces. They keep host post-processing such as the
+    // Wannier90 interface and Berry phase working, since those run on the CPU
+    // wavefunction mirror even in GPU calculations. Null when
+    // device == "cpu", where fft_float/fft_double already serve both
+    // interfaces.
+    std::shared_ptr<FFT_BASE<float>> host_fft_float = nullptr;
+    std::shared_ptr<FFT_BASE<double>> host_fft_double = nullptr;
+
+    // The backend that serves the host-memory interface, whichever it is.
+    FFT_BASE<float>* get_host_fft_float() const
+    {
+        return (this->device == "cpu") ? this->fft_float.get() : this->host_fft_float.get();
+    }
+    FFT_BASE<double>* get_host_fft_double() const
+    {
+        return (this->device == "cpu") ? this->fft_double.get() : this->host_fft_double.get();
+    }
 
     std::string device = "cpu";
     std::string precision = "double";

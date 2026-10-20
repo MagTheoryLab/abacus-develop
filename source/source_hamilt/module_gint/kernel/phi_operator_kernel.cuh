@@ -178,12 +178,17 @@ __global__ void set_phi_dphi_kernel(
             const double inv_dist = 1.0 / dist;  // hoisted: re-used by every iw below
             const double pos = dist / dr_uniform;
             const int ip = static_cast<int>(pos);
-            const double x0 = pos - ip;
-            const double x1 = 1.0 - x0;
-            const double x2 = 2.0 - x0;
-            const double x3 = 3.0 - x0;
-            const double x12 = x1 * x2 / 6;
-            const double x03 = x0 * x3 / 2;
+            // Match set_phi: differentiate the same cubic Hermite interpolant.
+            const double dx = pos - ip;
+            const double dx2 = dx * dx;
+            const double dx3 = dx2 * dx;
+            const double c3 = 3.0 * dx2 - 2.0 * dx3;
+            const double c1 = 1.0 - c3;
+            const double c2 = (dx - 2.0 * dx2 + dx3) * dr_uniform;
+            const double c4 = (dx3 - dx2) * dr_uniform;
+            const double dc3 = 6.0 * dx * (1.0 - dx) / dr_uniform;
+            const double dc2 = 1.0 - 4.0 * dx + 3.0 * dx2;
+            const double dc4 = 3.0 * dx2 - 2.0 * dx;
             double tmp = 0;
             double dtmp = 0;
             const int it_nw = atom_type * nwmax;
@@ -194,10 +199,10 @@ __global__ void set_phi_dphi_kernel(
             {
                 if (atom_iw2_new[it_nw + iw])
                 {
-                    tmp = x12 * (psi_u[iw_nr] * x3 + psi_u[iw_nr + 3] * x0)
-                        + x03 * (psi_u[iw_nr + 1] * x2 - psi_u[iw_nr + 2] * x1);
-                    dtmp = x12 * (dpsi_u[iw_nr] * x3 + dpsi_u[iw_nr + 3] * x0)
-                         + x03 * (dpsi_u[iw_nr + 1] * x2 - dpsi_u[iw_nr + 2] * x1);
+                    tmp = c1 * psi_u[iw_nr] + c2 * dpsi_u[iw_nr]
+                          + c3 * psi_u[iw_nr + 1] + c4 * dpsi_u[iw_nr + 1];
+                    dtmp = dc3 * (psi_u[iw_nr + 1] - psi_u[iw_nr])
+                           + dc2 * dpsi_u[iw_nr] + dc4 * dpsi_u[iw_nr + 1];
                 }
                 const int iw_l = atom_iw2_l[it_nw + iw];
                 const int idx_ylm = atom_iw2_ylm [it_nw + iw];

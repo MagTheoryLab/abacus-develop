@@ -352,6 +352,9 @@ void ESolver_KS_LCAO_TDDFT<TR, Device>::print_step()
 template <typename TR, typename Device>
 void ESolver_KS_LCAO_TDDFT<TR, Device>::hamilt2rho_single(UnitCell& ucell, const int istep, const int iter, const double ethr)
 {
+    const double reference = this->pelec->pot->get_lcao_energy_reference();
+    this->pelec->set_output_energy_reference(reference);
+
     // Update the moving spatial gauge
     if (use_td_moving_gauge)
     {
@@ -435,7 +438,9 @@ void ESolver_KS_LCAO_TDDFT<TR, Device>::hamilt2rho_single(UnitCell& ucell, const
                 // Ground-state diagonalization forms an ordinary DMR. Apply the
                 // same hybrid phase convention as propagation before building rho.
                 this->dmat.dm->cal_dmr_td(td_p->get_phase_hybrid(), td_p->endpoint_A(), -1);
-                LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin, &this->chr, this->inp_->nelec, ucell.omega, false);
+                const double density_scale = LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin,
+                                                               &this->chr, this->inp_->nelec, ucell.omega, false);
+                this->pelec->pot->set_lcao_density_scale(density_scale);
             }
         }
     }
@@ -685,7 +690,9 @@ void ESolver_KS_LCAO_TDDFT<TR, Device>::weight_dm_rho(const UnitCell& ucell)
     }
 
     // get the real-space charge density, mohan add 2025-10-24
-    LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin, &this->chr, this->inp_->nelec, ucell.omega, false);
+    const double density_scale = LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin,
+                                                   &this->chr, this->inp_->nelec, ucell.omega, false);
+    this->pelec->pot->set_lcao_density_scale(density_scale);
 }
 
 template class ESolver_KS_LCAO_TDDFT<double, base_device::DEVICE_CPU>;

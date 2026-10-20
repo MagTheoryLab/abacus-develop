@@ -181,7 +181,35 @@ class ElecState
     double get_local_pp_energy();
 
     fenergy f_en; ///< energies contribute to the total free energy
-    Efermi eferm; ///< fermi energies
+    Efermi eferm; ///< Fermi energies in the internal Hamiltonian reference
+
+    // Snapshot the reference of the Hamiltonian BEFORE solving it. Potential
+    // updates after mixing must not change the reference of an existing spectrum.
+    void set_output_energy_reference(const double shift)
+    {
+        output_energy_reference_ = shift;
+    }
+    double get_output_energy_reference() const
+    {
+        return output_energy_reference_;
+    }
+    Efermi get_output_efermi() const
+    {
+        Efermi result = eferm;
+        result.ef += output_energy_reference_;
+        result.ef_up += output_energy_reference_;
+        result.ef_dw += output_energy_reference_;
+        return result;
+    }
+    ModuleBase::matrix get_output_eigenvalues() const
+    {
+        ModuleBase::matrix result = ekb;
+        for (int i = 0; i < result.nr * result.nc; ++i)
+        {
+            result.c[i] += output_energy_reference_;
+        }
+        return result;
+    }
 
     // below defines the bandgap:
 
@@ -197,6 +225,7 @@ class ElecState
     bool skip_weights = false;
 
   private:
+    double output_energy_reference_ = 0.0; ///< C/N in Ry; output only, never used by SCF or forces
     double dftu_energy_ = 0.0; ///< DFT+U energy, set by ESolver via set_dftu_energy()
 };
 

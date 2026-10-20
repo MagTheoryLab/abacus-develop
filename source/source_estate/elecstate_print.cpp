@@ -224,7 +224,7 @@ void print_etot(const Magnetism& magnet,
 
         //! band energy
         titles.push_back("E_band");
-        energies_Ry.push_back(elec.f_en.eband);
+        energies_Ry.push_back(elec.f_en.eband + inp.nelec * elec.get_output_energy_reference());
 
         //! one-electron energy
         titles.push_back("E_one_elec");
@@ -334,18 +334,19 @@ void print_etot(const Magnetism& magnet,
         energies_Ry.push_back(elec.f_en.etot_harris);
     }
 
-    // print out the Fermi energy if needed
+    const Efermi output_efermi = elec.get_output_efermi();
+    // print out the Fermi energy in the same reference as the physical potential
     if (two_fermi)
     {
         titles.push_back("E_Fermi_up");
-        energies_Ry.push_back(elec.eferm.ef_up);
+        energies_Ry.push_back(output_efermi.ef_up);
         titles.push_back("E_Fermi_dw");
-        energies_Ry.push_back(elec.eferm.ef_dw);
+        energies_Ry.push_back(output_efermi.ef_dw);
     }
     else
     {
         titles.push_back("E_Fermi");
-        energies_Ry.push_back(elec.eferm.ef);
+        energies_Ry.push_back(output_efermi.ef);
     }
 
     // print out the band gap if needed

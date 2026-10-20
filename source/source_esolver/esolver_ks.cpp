@@ -315,7 +315,8 @@ void ESolver_KS::iter_finish(UnitCell& ucell, const int istep, int& iter, bool &
     {
         if (iter % this->inp_->out_freq_elec == 0 || iter == this->inp_->scf_nmax || conv_esolver)
         {
-            ModuleIO::write_eig_iter(this->pelec->ekb,
+            const ModuleBase::matrix output_ekb = this->pelec->get_output_eigenvalues();
+            ModuleIO::write_eig_iter(output_ekb,
                                      this->pelec->wg,
                                      *this->pelec->klist,
                                      this->inp_->nbands,
@@ -435,7 +436,8 @@ void ESolver_KS::after_scf(UnitCell& ucell, const int istep, const bool conv_eso
     ESolver_FP::after_scf(ucell, istep, conv_esolver);
 
     // 3) write eigenvalues and occupations to eig_occ.txt
-    ModuleIO::write_eig_file(this->pelec->ekb,
+    const ModuleBase::matrix output_ekb = this->pelec->get_output_eigenvalues();
+    ModuleIO::write_eig_file(output_ekb,
                              this->pelec->wg,
                              this->kv,
                              this->inp_->nbands,
@@ -444,7 +446,7 @@ void ESolver_KS::after_scf(UnitCell& ucell, const int istep, const bool conv_eso
                              istep);
 
     // 4) write band information to band.txt
-    ModuleIO::write_bands(*this->inp_, this->pelec->ekb, this->kv, GlobalV::ofs_running);
+    ModuleIO::write_bands(*this->inp_, output_ekb, this->kv, GlobalV::ofs_running);
 
 }
 

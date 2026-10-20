@@ -137,6 +137,35 @@ double ElecState::cal_delta_eband(const UnitCell& ucell) const
 	ModuleBase::timer::start("ElecState", "cal_delta_eband");
 	// out potentials from potential mixing
 	// total energy and band energy corrections
+    const double density_scale = this->pot->get_lcao_density_scale();
+    if (density_scale > 0.0)
+    {
+        // The band energy contains integral(q_out*u_in), while the local
+        // density functional uses normalized rho_out, including its ionic term.
+        // The stored scale belongs to q_out; u_in remains the Hamiltonian used
+        // for this diagonalization until update_from_charge() is called.
+        double correction = 0.0;
+        for (int is = 0; is < this->charge->nspin; ++is)
+        {
+            const double* mapped = this->pot->get_lcao_v(is);
+            const bool charge_channel = is == 0 || this->charge->nspin == 2;
+            for (int ir = 0; ir < this->charge->nrxx; ++ir)
+            {
+                correction -= this->charge->rho[is][ir] * mapped[ir] / density_scale;
+                if (charge_channel)
+                {
+                    correction += this->charge->rho[is][ir] * this->pot->get_fixed_v()[ir];
+                }
+            }
+        }
+#ifdef __MPI
+        Parallel_Reduce::reduce_pool(correction);
+#endif
+        correction *= ucell.omega / this->charge->rhopw->nxyz;
+        correction -= 2.0 * this->f_en.exx;
+        ModuleBase::timer::end("ElecState", "cal_delta_eband");
+        return correction;
+    }
     double deband0 = 0.0;
     double deband_aux = 0.0;
 

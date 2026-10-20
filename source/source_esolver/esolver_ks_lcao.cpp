@@ -473,6 +473,9 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
 {
     ModuleBase::TITLE("ESolver_KS_LCAO", "hamilt2rho_single");
 
+    const double reference = this->pelec->pot->get_lcao_energy_reference();
+    this->pelec->set_output_energy_reference(reference);
+
     // 1) reset energy
     this->pelec->f_en.eband = 0.0;
     this->pelec->f_en.demet = 0.0;
@@ -578,7 +581,9 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     {
         // Lambda loop updated the density matrix (DM) but not the real-space charge density.
         // HSolver was skipped, so we need to sync rho from DM manually.
-        LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin, &this->chr, this->inp_->nelec, ucell.omega, false);
+        const double density_scale = LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin,
+                                                       &this->chr, this->inp_->nelec, ucell.omega, false);
+        this->pelec->pot->set_lcao_density_scale(density_scale);
     }
 
     // 4) EXX

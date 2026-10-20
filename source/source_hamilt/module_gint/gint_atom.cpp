@@ -158,14 +158,20 @@ void GintAtom::set_phi_dphi(
             // interpolation
             const double position = dist / dr_uniform;
             const int ip = static_cast<int>(position);
-            const double x0 = position - ip;
-            const double x1 = 1.0 - x0;
-            const double x2 = 2.0 - x0;
-            const double x3 = 3.0 - x0;
-            const double x12 = x1 * x2 / 6;
-            const double x03 = x0 * x3 / 2;
+            // Match set_phi: differentiate the same cubic Hermite interpolant.
+            const double dx = position - ip;
+            const double dx2 = dx * dx;
+            const double dx3 = dx2 * dx;
+            const double c3 = 3.0 * dx2 - 2.0 * dx3;
+            const double c1 = 1.0 - c3;
+            const double c2 = (dx - 2.0 * dx2 + dx3) * dr_uniform;
+            const double c4 = (dx3 - dx2) * dr_uniform;
+            const double dc3 = 6.0 * dx * (1.0 - dx) / dr_uniform;
+            const double dc2 = 1.0 - 4.0 * dx + 3.0 * dx2;
+            const double dc4 = 3.0 * dx2 - 2.0 * dx;
 
-            double tmp, dtmp;
+            double tmp = 0.0;
+            double dtmp = 0.0;
             for(int iw = 0; iw < atom_->nw; ++iw)
             {
                 // this is a new 'l', we need 1D orbital wave
@@ -174,14 +180,10 @@ void GintAtom::set_phi_dphi(
                 {
                     auto psi_uniform = p_psi_uniform_[iw];
                     auto dpsi_uniform = p_dpsi_uniform_[iw];
-                    // use Polynomia Interpolation method to get the
-                    // wave functions
-
-                    tmp = x12 * (psi_uniform[ip] * x3 + psi_uniform[ip + 3] * x0)
-                        + x03 * (psi_uniform[ip + 1] * x2 - psi_uniform[ip + 2] * x1);
-
-                    dtmp = x12 * (dpsi_uniform[ip] * x3 + dpsi_uniform[ip + 3] * x0)
-                        + x03 * (dpsi_uniform[ip + 1] * x2 - dpsi_uniform[ip + 2] * x1);
+                    tmp = c1 * psi_uniform[ip] + c2 * dpsi_uniform[ip]
+                          + c3 * psi_uniform[ip + 1] + c4 * dpsi_uniform[ip + 1];
+                    dtmp = dc3 * (psi_uniform[ip + 1] - psi_uniform[ip])
+                           + dc2 * dpsi_uniform[ip] + dc4 * dpsi_uniform[ip + 1];
                 } // new l is used.
 
                 // get the 'l' of this localized wave function

@@ -108,7 +108,7 @@ void Veff<OperatorLCAO<double, double>>::contributeHR()
     //(1) prepare data for this k point.
     // copy the local potential from array.
     //-----------------------------------------
-    double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
+    double* vr_eff1 = this->pot->get_lcao_v(this->current_spin);
     double* vofk_eff1 = this->pot->get_eff_vofk(this->current_spin);
 
     if(XC_Functional::get_ked_flag())
@@ -138,7 +138,7 @@ void Veff<OperatorLCAO<std::complex<double>, double>>::contributeHR()
     //(1) prepare data for this k point.
     // copy the local potential from array.
     //-----------------------------------------
-    double* vr_eff1 = this->pot->get_eff_v(this->current_spin);
+    double* vr_eff1 = this->pot->get_lcao_v(this->current_spin);
     double* vofk_eff1 = this->pot->get_eff_vofk(this->current_spin);
 
     if(XC_Functional::get_ked_flag())
@@ -169,7 +169,7 @@ void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeH
     if (this->nspin < 4)
     {
         HContainer<double> real_hr = make_real_hcontainer(*this->hR);
-        double* vr_eff = this->pot->get_eff_v(this->current_spin);
+        double* vr_eff = this->pot->get_lcao_v(this->current_spin);
         double* vofk_eff = this->pot->get_eff_vofk(this->current_spin);
         if (XC_Functional::get_ked_flag())
         {
@@ -191,7 +191,7 @@ void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeH
         std::vector<const double*> vofk_eff(4, nullptr);
         for (int is = 0; is < 4; is++)
         {
-            vr_eff[is] = this->pot->get_eff_v(is);
+            vr_eff[is] = this->pot->get_lcao_v(is);
             if(XC_Functional::get_ked_flag())
             {
                 vofk_eff[is] = this->pot->get_eff_vofk(is);
@@ -239,7 +239,7 @@ void Veff<OperatorLCAO<std::complex<double>, std::complex<double>>>::contributeH
     std::vector<const double*> vr_eff(4, nullptr);
     for (int is = 0; is < 4; ++is)
     {
-        vr_eff[is] = this->pot->get_eff_v(is);
+        vr_eff[is] = this->pot->get_lcao_v(is);
     }
     this->device_hr_ = ModuleGint::cal_gint_vl_device(vr_eff, this->hR);
     ModuleBase::timer::end("Veff", "contributeHRDevice");

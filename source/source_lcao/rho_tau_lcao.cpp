@@ -2,7 +2,7 @@
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_hamilt/module_gint/gint_interface.h"
 
-void LCAO_domain::dm2rho(std::vector<hamilt::HContainer<double>*> &dmr,
+double LCAO_domain::dm2rho(std::vector<hamilt::HContainer<double>*> &dmr,
     const int nspin,
     Charge* chr,
     const double nelec,
@@ -22,7 +22,17 @@ void LCAO_domain::dm2rho(std::vector<hamilt::HContainer<double>*> &dmr,
     // omega must be ucell.omega (current cell volume), NOT rhopw->omega which
     // is stale in variable-cell calculations (pw_rho/pw_rhod are not rebuilt
     // on cell change). See Charge::renormalize_rho for details.
-    if(!skip_normalize)chr->renormalize_rho(nelec, omega);
+    double density_scale = 0.0;
+    if (!skip_normalize)
+    {
+        const double raw_nelec = chr->sum_rho(omega);
+        chr->renormalize_rho(nelec, omega);
+        // Meta-GGA also needs the kinetic-density pullback and is left unchanged.
+        if (!chr->meta_gga)
+        {
+            density_scale = nelec / raw_nelec;
+        }
+    }
 
     // should be moved somewhere else, mohan 20251024
     if (XC_Functional::get_ked_flag())
@@ -33,7 +43,7 @@ void LCAO_domain::dm2rho(std::vector<hamilt::HContainer<double>*> &dmr,
     // symmetrize of charge density should be here, mohan 20251023
 
     ModuleBase::timer::end("LCAO_domain", "dm2rho");
-    return;
+    return density_scale;
 }
 
 

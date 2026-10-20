@@ -164,6 +164,17 @@ void Force_Stress_LCAO<T>::getForceStress(UnitCell& ucell,
                                     sparts.sigmacc, sparts.sigmaxc, pelec->f_en.etxc, pelec->charge,
                                     rhopw, locpp, sf, cfg.nspin, cfg.domag, cfg.domag_z, cfg.gga_grad, cfg.gamma_only_pw, use_gpu);
     }
+    if (isstress)
+    {
+        // At fixed raw grid density, d(alpha)/d(epsilon_ii) = -alpha.
+        // With sigma = -dE/d(epsilon)/Omega, this adds +C/Omega to each
+        // diagonal, in addition to the mapped-potential Pulay stress below.
+        const double normalization_stress = pelec->pot->get_lcao_normalization_energy() / ucell.omega;
+        for (int i = 0; i < 3; ++i)
+        {
+            sparts.sigmaxc(i, i) += normalization_stress;
+        }
+    }
     // Calculate operator-based force/stress terms (kinetic, overlap,
     // nonlocal, rt-TDDFT hybrid gauge, local Pulay term and DeltaSpin).
     this->cal_operator_fs(ucell, gd, pv, pelec, dmat, psi, two_center_bundle,

@@ -456,6 +456,11 @@ void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
         }
     }
 
+    if (total_active_ranks == 0)
+    {
+        ModuleBase::WARNING_QUIT("HSolverLCAO::parakSolve_cusolver", "No active GPU ranks for cuSolver.");
+    }
+
     // active_ranks will store the global ranks of all active processes across all nodes
     // The order of global ranks stored here determines the order in which they will be assigned to k-points.
     // The k-points will be distributed among these ranks in a round-robin fashion.

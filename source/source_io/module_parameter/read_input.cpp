@@ -249,9 +249,9 @@ void ReadInput::read_parameters(Parameter& param, const std::string& filename_in
     }
 
     // 6. Initialize GPU device context (unified entry point)
-    // This must be after bcastfunc to ensure param.inp.device is synchronized across all ranks
-    // This replaces scattered cudaSetDevice/hipSetDevice calls throughout the codebase
-    if (param.inp.device == "gpu")
+    // Both device and solver must be synchronized across all ranks.
+    // LCAO can use CPU integration with a GPU eigensolver.
+    if (param.inp.device == "gpu" || param.inp.ks_solver == "cusolver" || param.inp.ks_solver == "cusolvermp")
     {
         base_device::DeviceContext::instance().init();
     }

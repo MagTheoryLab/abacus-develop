@@ -24,4 +24,5 @@ mixing_type       broyden
 mixing_beta       0.3
 gamma_only        1
 ks_solver         cusolver
-device            gpu
+# Exercise CPU integration with GPU diagonalization; the other cases use device=gpu.
+device            cpu

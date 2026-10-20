@@ -89,8 +89,8 @@ void record_device_memory<base_device::DEVICE_GPU>(const base_device::DEVICE_GPU
  * 3. Ensure thread-safe initialization
  *
  * Usage:
- *   // Initialize (call once after MPI init and after determining device=gpu)
- *   DeviceContext::instance().init(MPI_COMM_WORLD);
+ *   // Initialize after MPI init when the device or eigensolver requires a GPU.
+ *   DeviceContext::instance().init();
  *
  *   // Query device info
  *   int dev_id = DeviceContext::instance().get_device_id();
@@ -112,7 +112,7 @@ public:
      * 3. Binds the current process to a GPU device (local_rank % device_count)
      *
      * @note This function should only be called once. Subsequent calls are no-ops.
-     * @note This function should only be called when device=gpu is confirmed.
+     * @note Call when device=gpu or a GPU eigensolver is selected.
      * @note In MPI builds, uses MPI_COMM_WORLD internally.
      */
     void init();

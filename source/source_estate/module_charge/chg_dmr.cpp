@@ -132,15 +132,62 @@ void mix_dmr(const std::vector<double*>& dmr_out,
              const int nnr,
              Base_Mixing::Mixing* mixing,
              Base_Mixing::Mixing_Data& mdata,
-             const MixingConfig& cfg)
+             const MixingConfig& cfg,
+             const std::vector<DmrSpinBlock>& spin_blocks)
 {
     ModuleBase::TITLE("module_charge", "mix_dmr");
     ModuleBase::timer::start("module_charge", "mix_dmr");
     check_dmr_inputs(dmr_out, dmr_in, nnr, mixing, cfg);
 
-    if (cfg.nspin == 1 || cfg.nspin == 4)
+    if (cfg.nspin == 1)
     {
         mixing->push_data(mdata, dmr_in[0], dmr_out[0], nullptr, false);
+        mixing->mix_data(mdata, dmr_out[0]);
+    }
+    else if (cfg.nspin == 4)
+    {
+        // Each atom-pair/R block is a row-major matrix with interleaved Pauli
+        // channels, as consumed by Gint. Its row stride can vary between blocks.
+        int covered = 0;
+        for (const auto& block : spin_blocks)
+        {
+            if (block.offset != covered || block.rows <= 0 || block.cols <= 0
+                || block.rows % 2 != 0 || block.cols % 2 != 0
+                || block.rows > (nnr - covered) / block.cols)
+            {
+                ModuleBase::WARNING_QUIT("module_charge::mix_dmr", "invalid nspin=4 DMR block layout");
+            }
+            covered += block.rows * block.cols;
+        }
+        if (covered != nnr)
+        {
+            ModuleBase::WARNING_QUIT("module_charge::mix_dmr", "incomplete nspin=4 DMR block layout");
+        }
+        const double beta = cfg.mixing_beta;
+        const double beta_mag = cfg.mixing_beta_mag;
+        std::function<void(double*, const double*, const double*)> spin_step
+            = [&spin_blocks, beta, beta_mag](double* out, const double* in, const double* residual) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+                  for (int ib = 0; ib < static_cast<int>(spin_blocks.size()); ++ib)
+                  {
+                      const auto& block = spin_blocks[ib];
+                      for (int row = 0; row < block.rows; ++row)
+                      {
+                          for (int col = 0; col < block.cols; ++col)
+                          {
+                              const int index = block.offset + row * block.cols + col;
+                              const bool charge = row % 2 == 0 && col % 2 == 0;
+                              const double channel_beta = charge ? beta : beta_mag;
+                              out[index] = in[index] + channel_beta * residual[index];
+                          }
+                      }
+                  }
+              };
+        // Reuse the rho mixing coefficients/history convention; only change
+        // the plain step's magnetic beta. DMR has no Kerker preconditioner.
+        mixing->push_data(mdata, dmr_in[0], dmr_out[0], nullptr, spin_step, false);
         mixing->mix_data(mdata, dmr_out[0]);
     }
     else // cfg.nspin == 2

@@ -19,7 +19,7 @@
  *   - mix_dmr: mix the real-space density matrix
  *     - nspin == 1: out = in + beta * (out_new - in)
  *     - nspin == 2: up/down -> charge/mag channels, two betas, back
- *     - nspin == 4: treated like nspin == 1 (single channel)
+ *     - nspin == 4: interleaved charge/mx/my/mz blocks with independent betas
  *     - nnr == 0: null buffers are allowed (empty partition)
  *     - abort on invalid inputs (null mixing, bad nspin, null buffer with nnr>0)
  */
@@ -59,6 +59,7 @@ class ChgDmrTest : public ::testing::Test
   protected:
     Base_Mixing::Plain_Mixing mixing;
     Base_Mixing::Mixing_Data mdata;
+    std::vector<module_charge::DmrSpinBlock> spin_blocks;
 };
 
 // ---------------------------------------------------------------------------
@@ -126,7 +127,7 @@ TEST_F(ChgDmrTest, MixDmrNspin1PlainStep)
     std::vector<double*> out_ptrs = {dmr_out.data()};
     std::vector<const double*> in_ptrs = {dmr_in.data()};
 
-    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg);
+    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks);
 
     // plain mixing: out = in + beta * (out_new - in) = 1 + 0.5 * (3 - 1) = 2
     for (int i = 0; i < nnr; ++i)
@@ -158,7 +159,7 @@ TEST_F(ChgDmrTest, MixDmrNspin2ChargeConservation)
     std::vector<double*> out_ptrs = {up_out.data(), dn_out.data()};
     std::vector<const double*> in_ptrs = {up_in.data(), dn_in.data()};
 
-    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg);
+    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks);
 
     // charge channel: c_save = 1+2 = 3, c_new = 3+4 = 7
     // c_mix = 3 + 0.5 * (7 - 3) = 5
@@ -174,29 +175,91 @@ TEST_F(ChgDmrTest, MixDmrNspin2ChargeConservation)
 }
 
 // ---------------------------------------------------------------------------
-// mix_dmr nspin == 4 (treated as single channel like nspin == 1)
+// mix_dmr nspin == 4 (interleaved Pauli blocks)
 // ---------------------------------------------------------------------------
 
-TEST_F(ChgDmrTest, MixDmrNspin4SingleChannel)
+TEST_F(ChgDmrTest, MixDmrNspin4RectangularBlocksAndThreeMagneticChannels)
 {
-    const int nnr = 3;
-    MixingConfig cfg = make_cfg(4, 0.5, 0.5, 2);
-    mixing.mixing_beta = 0.5;
-
+    // Two orbital/R blocks with different row strides: 4x6 and 2x4.
+    // A flat index % 4 classification would mix the wrong channels here.
+    const int nnr = 32;
+    spin_blocks = {{0, 4, 6}, {24, 2, 4}};
+    const double beta = 0.24;
+    const double beta_mag = 0.96;
+    MixingConfig cfg = make_cfg(4, beta, beta_mag, 2);
+    mixing.mixing_beta = beta;
     module_charge::init_mixing_dmr(&mixing, mdata, nnr, cfg);
-
-    std::vector<double> dmr_in(nnr, 2.0);
-    std::vector<double> dmr_out(nnr, 6.0);
-    std::vector<double*> out_ptrs = {dmr_out.data()};
-    std::vector<const double*> in_ptrs = {dmr_in.data()};
-
-    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg);
-
-    // out = 2 + 0.5 * (6 - 2) = 4
+    std::vector<double> saved(nnr);
+    std::vector<double> output(nnr);
+    std::vector<double> expected(nnr);
     for (int i = 0; i < nnr; ++i)
     {
-        EXPECT_NEAR(dmr_out[i], 4.0, 1e-12);
+        saved[i] = 0.1 * (i + 1);
+        output[i] = saved[i] + 0.03 * (i - 15);
     }
+    // Independent oracle: use Gint's orbital-index to Pauli-channel mapping.
+    for (const auto& block : spin_blocks)
+    {
+        for (int spin = 0; spin < 4; ++spin)
+        {
+            const double b = spin == 0 ? beta : beta_mag;
+            for (int row = 0; row < block.rows / 2; ++row)
+            {
+                for (int col = 0; col < block.cols / 2; ++col)
+                {
+                    const int i = block.offset + (2 * row + spin / 2) * block.cols + 2 * col + spin % 2;
+                    expected[i] = saved[i] + b * (output[i] - saved[i]);
+                }
+            }
+        }
+    }
+    std::vector<double*> out_ptrs = {output.data()};
+    std::vector<const double*> in_ptrs = {saved.data()};
+    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks);
+    for (int i = 0; i < nnr; ++i)
+    {
+        EXPECT_NEAR(output[i], expected[i], 1e-14) << i;
+    }
+}
+
+TEST_F(ChgDmrTest, MixDmrNspin4EqualBetasPreserveOldStep)
+{
+    const int nnr = 8;
+    spin_blocks = {{0, 2, 4}};
+    MixingConfig cfg = make_cfg(4, 0.5, 0.5, 2);
+    mixing.mixing_beta = 0.5;
+    module_charge::init_mixing_dmr(&mixing, mdata, nnr, cfg);
+    std::vector<double> saved(nnr, 2.0);
+    std::vector<double> output(nnr, 6.0);
+    std::vector<double*> out_ptrs = {output.data()};
+    std::vector<const double*> in_ptrs = {saved.data()};
+    module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks);
+    for (const double value : output)
+    {
+        EXPECT_DOUBLE_EQ(value, 4.0);
+    }
+}
+
+TEST_F(ChgDmrTest, MixDmrNspin4InvalidLayoutAborts)
+{
+    const int nnr = 8;
+    MixingConfig cfg = make_cfg(4, 0.24, 0.96, 2);
+    module_charge::init_mixing_dmr(&mixing, mdata, nnr, cfg);
+    std::vector<double> data(nnr, 1.0);
+    std::vector<double*> out_ptrs = {data.data()};
+    std::vector<const double*> in_ptrs = {data.data()};
+    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks), "");
+    spin_blocks = {{0, 1, 8}};
+    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks), "");
+}
+
+TEST_F(ChgDmrTest, MixDmrNspin4EmptyPartition)
+{
+    MixingConfig cfg = make_cfg(4, 0.24, 0.96, 2);
+    module_charge::init_mixing_dmr(&mixing, mdata, 0, cfg);
+    std::vector<double*> out_ptrs = {nullptr};
+    std::vector<const double*> in_ptrs = {nullptr};
+    EXPECT_NO_THROW(module_charge::mix_dmr(out_ptrs, in_ptrs, 0, &mixing, mdata, cfg, spin_blocks));
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +275,7 @@ TEST_F(ChgDmrTest, MixDmrZeroNnrAllowsNullBuffers)
     // null buffers are legitimate when the rank owns no DMR elements
     std::vector<double*> out_ptrs = {nullptr};
     std::vector<const double*> in_ptrs = {nullptr};
-    EXPECT_NO_THROW(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg));
+    EXPECT_NO_THROW(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks));
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +289,7 @@ TEST_F(ChgDmrTest, MixDmrNullMixingAborts)
     std::vector<double> buf(nnr, 0.0);
     std::vector<double*> out_ptrs = {buf.data()};
     std::vector<const double*> in_ptrs = {buf.data()};
-    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, nullptr, mdata, cfg), "");
+    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, nullptr, mdata, cfg, spin_blocks), "");
 }
 
 TEST_F(ChgDmrTest, MixDmrBadNspinAborts)
@@ -236,7 +299,7 @@ TEST_F(ChgDmrTest, MixDmrBadNspinAborts)
     std::vector<double> buf(nnr, 0.0);
     std::vector<double*> out_ptrs = {buf.data()};
     std::vector<const double*> in_ptrs = {buf.data()};
-    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg), "");
+    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks), "");
 }
 
 TEST_F(ChgDmrTest, MixDmrNullBufferWithPositiveNnrAborts)
@@ -247,5 +310,5 @@ TEST_F(ChgDmrTest, MixDmrNullBufferWithPositiveNnrAborts)
     // dmr_out is null while nnr > 0
     std::vector<double*> out_ptrs = {nullptr};
     std::vector<const double*> in_ptrs = {buf.data()};
-    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg), "");
+    EXPECT_DEATH(module_charge::mix_dmr(out_ptrs, in_ptrs, nnr, &mixing, mdata, cfg, spin_blocks), "");
 }

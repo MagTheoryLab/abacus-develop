@@ -671,6 +671,7 @@ void ESolver_KS_LCAO<TK, TR>::iter_finish(UnitCell& ucell, const int istep, int&
     // overwrite occ_mat.txt with the latest occupation matrix and the
     // actual charge-density residual; ESolver_KS::iter_finish() above has
     // computed drho for this electronic step.
+    const auto soc_layout = DFTU_BASE::lcao_soc_layout(this->inp_->dft_plus_u);
     DFTU_BASE::write_latest_occmat(*this->dftu_,
                                       ucell,
                                       global_out_dir,
@@ -681,7 +682,7 @@ void ESolver_KS_LCAO<TK, TR>::iter_finish(UnitCell& ucell, const int istep, int&
                                       this->scf_thr,
                                       this->drho,
                                       occmat_cfg,
-                                      DFTU_BASE::SOC_LAYOUT_SPIN_BASIS_REAL);
+                                      soc_layout);
 
     // append the current electronic-step section to occ_matg{#}.txt
     // LCAO computes the occupation matrix in every electronic iteration, so
@@ -698,7 +699,7 @@ void ESolver_KS_LCAO<TK, TR>::iter_finish(UnitCell& ucell, const int istep, int&
                                         this->scf_thr,
                                         this->drho,
                                         occmat_cfg,
-                                        DFTU_BASE::SOC_LAYOUT_SPIN_BASIS_REAL);
+                                        soc_layout);
 
     const bool precision_switched = this->gint_precision_controller_.update_after_iteration(this->drho, this->scf_thr);
     this->gint_info_->set_exec_precision(this->gint_precision_controller_.current_precision());
@@ -727,12 +728,33 @@ void ESolver_KS_LCAO<TK, TR>::iter_finish(UnitCell& ucell, const int istep, int&
                 dmr_out.push_back(dmr_containers[is]->get_wrapper());
                 dmr_in.push_back(dmr_save[is].data());
             }
+            std::vector<module_charge::DmrSpinBlock> spin_blocks;
+            if (this->inp_->nspin == 4)
+            {
+                const auto& container = *dmr_containers[0];
+                for (int ip = 0; ip < container.size_atom_pairs(); ++ip)
+                {
+                    const auto& pair = container.get_atom_pair(ip);
+                    for (int ir = 0; ir < pair.get_R_size(); ++ir)
+                    {
+                        const int rows = pair.get_row_size();
+                        const int cols = pair.get_col_size();
+                        // Empty rank-local blocks contain no spin channels.
+                        if (rows > 0 && cols > 0)
+                        {
+                            const int offset = pair.get_pointer(ir) - dmr_out[0];
+                            spin_blocks.push_back({offset, rows, cols});
+                        }
+                    }
+                }
+            }
             module_charge::mix_dmr(dmr_out,
                                    dmr_in,
                                    dmr_containers[0]->get_nnr(),
                                    this->p_chgmix->get_mixing(),
                                    this->p_chgmix->get_dmr_mdata(),
-                                   this->p_chgmix->get_mixing_config());
+                                   this->p_chgmix->get_mixing_config(),
+                                   spin_blocks);
         }
     }
 

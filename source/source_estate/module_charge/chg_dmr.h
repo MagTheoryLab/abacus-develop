@@ -22,6 +22,15 @@ class Mixing_Data;
 namespace module_charge
 {
 
+/// One contiguous, row-major Pauli block in the nspin=4 DMR buffer.
+/// Within each orbital pair, (even,even) is charge; the other entries are mx,my,mz.
+struct DmrSpinBlock
+{
+    int offset;
+    int rows;
+    int cols;
+};
+
 /**
  * @brief Allocate the mixing buffer for the real-space density matrix and
  *        clear its history.
@@ -43,9 +52,11 @@ void init_mixing_dmr(Base_Mixing::Mixing* mixing,
 /**
  * @brief Mix the real-space density matrix (LCAO calculations only).
  *
- * For nspin == 1/4 the single spin channel is mixed directly; for nspin == 2
+ * For nspin == 1 the single spin channel is mixed directly; for nspin == 2
  * the up/down channels are transformed into charge/magnetization channels,
- * mixed with independent betas, and transformed back.
+ * mixed with independent betas, and transformed back. For nspin == 4 the
+ * interleaved Pauli blocks use beta for charge and beta_mag for all three
+ * magnetization components, without changing their storage order.
  *
  * @param dmr_out  writable DMR buffers, one per spin channel, each of length
  *                 nnr; mixed results are written back through these pointers
@@ -55,13 +66,15 @@ void init_mixing_dmr(Base_Mixing::Mixing* mixing,
  * @param mixing   mixing strategy object, non-null
  * @param mdata    DMR mixing history buffer
  * @param cfg      mixing config (nspin and the two mixing betas)
+ * @param spin_blocks ordered contiguous blocks covering nnr for nspin=4; empty otherwise
  */
 void mix_dmr(const std::vector<double*>& dmr_out,
              const std::vector<const double*>& dmr_in,
              const int nnr,
              Base_Mixing::Mixing* mixing,
              Base_Mixing::Mixing_Data& mdata,
-             const MixingConfig& cfg);
+             const MixingConfig& cfg,
+             const std::vector<DmrSpinBlock>& spin_blocks);
 
 } // namespace module_charge
 

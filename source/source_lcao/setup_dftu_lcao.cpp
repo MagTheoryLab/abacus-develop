@@ -82,8 +82,9 @@ void finish_dftu_lcao(const bool conv_esolver,
             DFTU_LCAO::cal_energy_correction(*dftu_ptr, ucell, PARAM.inp.nspin);
         }
     }
+    const auto soc_layout = DFTU_BASE::lcao_soc_layout(dft_plus_u);
     DFTU_BASE::output(*dftu_ptr, ucell, global_out_dir, nspin, npol,
-                      istep, iter, occmat_cfg, DFTU_BASE::SOC_LAYOUT_SPIN_BASIS_REAL);
+                      istep, iter, occmat_cfg, soc_layout);
     
     /// use the converged occupation matrix for next MD/Relax SCF calculation
     if (conv_esolver)

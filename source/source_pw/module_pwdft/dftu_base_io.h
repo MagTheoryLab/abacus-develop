@@ -96,9 +96,9 @@ void append_ion_step_snapshot(const Plus_U_Base& dftu,
 /// init_occ_mat and init_chg.
 ///
 /// @param soc_layout storage layout of the nspin == 4 occupation matrix;
-///        the PW path stores 4 contiguous Pauli blocks (b0, b1, b2, b3) and
+///        PW and the new LCAO method store 4 contiguous Pauli blocks (b0, b1, b2, b3) and
 ///        must reconstruct them from the (n_uu, Re(n_ud), Im(n_ud), n_dd)
-///        blocks written to the file; the LCAO path stores a real 2m x 2m
+///        blocks written to the file; legacy LCAO (dft_plus_u=2) stores a real 2m x 2m
 ///        spin-basis matrix and discards Im(n_ud).
 void read_occup_m(const UnitCell& ucell,
                   OccupationMatrix& occ,
@@ -195,7 +195,7 @@ void write_latest_occmat(const Plus_U_Base& dftu,
 /// only raw matrix elements. fmt selects between the legacy token layout
 /// (used for running log) and the readable snapshot layout of
 /// occ_mat.txt and occ_matg{#}.txt. soc_layout tells how the nspin == 4
-/// storage is arranged (PW Pauli blocks or LCAO real spin-basis matrix).
+/// storage is arranged (PW/new LCAO Pauli blocks or legacy LCAO real spin-basis matrix).
 /// Caller is responsible for opening/closing the stream.
 void write_occup_m(const Plus_U_Base& dftu,
                    const UnitCell& ucell,

@@ -75,7 +75,7 @@ TEST_F(DftuFsRTest, ReduceStressBasic)
     std::vector<double> stress_tmp = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     ModuleBase::matrix stress(3, 3);
 
-    reduce_stress_impl(&ucell, stress_tmp, stress);
+    reduce_stress_impl(&ucell, stress_tmp, stress, 2);
 
     // weight = lat0 / omega = 2.0 / 10.0 = 0.2
     const double w = 0.2;

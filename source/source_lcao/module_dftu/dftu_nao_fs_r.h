@@ -61,7 +61,7 @@ namespace DFTU_LCAO
 {
 
 /**
- * @brief Post-process force: MPI Allreduce and spin-degeneracy scaling.
+ * @brief Post-process force: MPI Allreduce and projector-derivative scaling.
  *
  * @param force  [in,out] force matrix (nat, 3), reduced and scaled
  * @param nspin  [in] number of spin channels (1, 2, or 4)
@@ -75,10 +75,12 @@ void reduce_force_impl(ModuleBase::matrix& force, int nspin);
  * @param ucell      [in] unit cell (for lat0/omega)
  * @param stress_tmp [in] Voigt-like 6-component stress, reduced in-place
  * @param stress     [out] full 3x3 stress tensor
+ * @param nspin      [in] spin channels; Pauli stress needs a factor 1/2 for 4
  */
 void reduce_stress_impl(const UnitCell* ucell,
                         const std::vector<double>& stress_tmp,
-                        ModuleBase::matrix& stress);
+                        ModuleBase::matrix& stress,
+                        int nspin);
 
 /**
  * @brief Non-template core of DFT+U force/stress in real space.

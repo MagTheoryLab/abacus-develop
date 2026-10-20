@@ -26,10 +26,15 @@ void reduce_force_impl(ModuleBase::matrix& force, const int nspin)
 
 void reduce_stress_impl(const UnitCell* ucell,
                         const std::vector<double>& stress_tmp,
-                        ModuleBase::matrix& stress)
+                        ModuleBase::matrix& stress,
+                        const int nspin)
 {
     Parallel_Reduce::reduce_all(const_cast<double*>(stress_tmp.data()), 6);
-    const double weight = ucell->lat0 / ucell->omega;
+    // Pauli potentials W obey dE_U = (1/2) sum_a Tr(W_a dN_a).
+    // Both CPU and GPU stress kernels already include both projector derivatives.
+    // Force combines those derivatives instead, cancelling this factor of 1/2.
+    const double spin_weight = nspin == 4 ? 0.5 : 1.0;
+    const double weight = spin_weight * ucell->lat0 / ucell->omega;
     for (int i = 0; i < 6; i++)
     {
         stress.c[i] = stress_tmp[i] * weight;

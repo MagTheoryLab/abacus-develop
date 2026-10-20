@@ -458,7 +458,7 @@ void cal_fs_nao_r_impl(const UnitCell* ucell,
     // stress renormalization
     if (cal_stress)
     {
-        reduce_stress_impl(ucell, stress_tmp, stress);
+        reduce_stress_impl(ucell, stress_tmp, stress, nspin);
     }
 
     ModuleBase::timer::end("DFTU_LCAO", "cal_fs_nao_r");

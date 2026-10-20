@@ -35,9 +35,9 @@ void reduce_all<double>(double* data, int n)
  *
  *   reduce_force_impl(force, nspin)
  *     - MPI Allreduce over ranks (stubbed no-op here)
- *     - multiply by 2 for nspin != 4 (spin-degeneracy factor)
+ *     - combine the two projector derivatives, with Pauli normalization for 4
  *
- *   reduce_stress_impl(ucell, stress_tmp, stress)
+ *   reduce_stress_impl(ucell, stress_tmp, stress, nspin)
  *     - MPI Allreduce over ranks (stubbed no-op here)
  *     - scale by lat0/omega and inflate the 6-component Voigt form
  *       (xx, xy, xz, yy, yz, zz) into the full 3x3 symmetric tensor
@@ -113,7 +113,7 @@ TEST_F(DftuFsReduceTest, ReduceStressVoigtToTensor)
     std::vector<double> stress_tmp = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     ModuleBase::matrix stress(3, 3);
 
-    reduce_stress_impl(&ucell, stress_tmp, stress);
+    reduce_stress_impl(&ucell, stress_tmp, stress, 1);
 
     const double w = ucell.lat0 / ucell.omega; // 0.2
     EXPECT_DOUBLE_EQ(stress(0, 0), 1.0 * w);
@@ -133,7 +133,7 @@ TEST_F(DftuFsReduceTest, ReduceStressSymmetric)
     std::vector<double> stress_tmp = {-1.0, 0.5, 2.5, -3.0, 1.5, 0.0};
     ModuleBase::matrix stress(3, 3);
 
-    reduce_stress_impl(&ucell, stress_tmp, stress);
+    reduce_stress_impl(&ucell, stress_tmp, stress, 1);
 
     for (int i = 0; i < 3; i++)
     {
@@ -152,7 +152,7 @@ TEST_F(DftuFsReduceTest, ReduceStressScalingWeight)
     std::vector<double> stress_tmp = {8.0, 0.0, 0.0, 8.0, 0.0, 8.0};
     ModuleBase::matrix stress(3, 3);
 
-    reduce_stress_impl(&ucell, stress_tmp, stress);
+    reduce_stress_impl(&ucell, stress_tmp, stress, 1);
 
     // weight = 1.0 / 4.0 = 0.25; hydrostatic input stays hydrostatic
     EXPECT_DOUBLE_EQ(stress(0, 0), 2.0);
@@ -161,6 +161,45 @@ TEST_F(DftuFsReduceTest, ReduceStressScalingWeight)
     EXPECT_DOUBLE_EQ(stress(0, 1), 0.0);
     EXPECT_DOUBLE_EQ(stress(0, 2), 0.0);
     EXPECT_DOUBLE_EQ(stress(1, 2), 0.0);
+}
+
+TEST_F(DftuFsReduceTest, PauliStressMatchesOccupationEnergyDerivative)
+{
+    // One projector: N_a = d_a b^2; vary its overlap b with each strain component.
+    ucell.lat0 = 1.0;
+    ucell.omega = 1.0;
+    const double u = 4.0;
+    const double b = 0.6;
+    const double h = 1.0e-5;
+    const double d[4] = {0.8, 0.12, -0.16, 0.24};
+    const double db[6] = {0.2, -0.3, 0.4, 0.5, -0.6, 0.7};
+    const int tensor_index[6] = {0, 1, 2, 4, 5, 8};
+    double d2 = 0.0;
+    for (double da : d)
+    {
+        d2 += da * da;
+    }
+    const auto energy = [=](double overlap) {
+        const double n0 = d[0] * overlap * overlap;
+        const double trace_n2 = 0.5 * d2 * overlap * overlap * overlap * overlap;
+        return 0.5 * u * (n0 - trace_n2);
+    };
+    // Raw two-sided projector contraction with W_0=U(1-N_0), W_i=-U*N_i.
+    const double wd = u * (d[0] - b * b * d2);
+    std::vector<double> raw(6);
+    for (int i = 0; i < 6; ++i)
+    {
+        raw[i] = -2.0 * b * db[i] * wd;
+    }
+    ModuleBase::matrix stress(3, 3);
+    reduce_stress_impl(&ucell, raw, stress, 4);
+    for (int i = 0; i < 6; ++i)
+    {
+        const double plus = b + h * db[i];
+        const double minus = b - h * db[i];
+        const double expected = -(energy(plus) - energy(minus)) / (2.0 * h);
+        EXPECT_NEAR(stress.c[tensor_index[i]], expected, 1.0e-9);
+    }
 }
 
 } // namespace

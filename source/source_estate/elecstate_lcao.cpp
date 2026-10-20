@@ -136,7 +136,15 @@ void ElecStateLCAO<double>::dm2rho(std::vector<double*> pexsi_DM,
         ModuleGint::cal_gint_tau(dm->get_dmr_vec(), PARAM.inp.nspin, this->charge->kin_r);
     }
 
-    this->charge->renormalize_rho(PARAM.inp.nelec, omega);
+    const double raw_nelec = this->charge->sum_rho(omega);
+    const double nelec = PARAM.inp.nelec;
+    this->charge->renormalize_rho(nelec, omega);
+    double density_scale = 0.0;
+    if (!this->charge->meta_gga)
+    {
+        density_scale = nelec / raw_nelec;
+    }
+    this->pot->set_lcao_density_scale(density_scale);
 
     ModuleBase::timer::end("ElecStateLCAO", "dm2rho");
     return;
@@ -159,7 +167,11 @@ void ElecStateLCAO<TK>::dmToRho(std::vector<hamilt::HContainer<double>*>& dmr,
                                 const double omega,
                                 bool skip_charge)
 {
-    LCAO_domain::dm2rho(dmr, nspin, chr, PARAM.inp.nelec, omega, skip_charge);
+    const double density_scale = LCAO_domain::dm2rho(dmr, nspin, chr, PARAM.inp.nelec, omega, skip_charge);
+    if (!skip_charge)
+    {
+        this->pot->set_lcao_density_scale(density_scale);
+    }
 }
 
 template class ElecStateLCAO<double>;               // Gamma_only case

@@ -144,6 +144,8 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
 
     //*****
 
+    const elecstate::Efermi output_efermi = pelec->get_output_efermi();
+    const ModuleBase::matrix output_ekb = pelec->get_output_eigenvalues();
     const bool out_app_flag = inp.out_app_flag;
     const bool gamma_only = PARAM.globalv.gamma_only_local;
     const int nspin = inp.nspin;
@@ -160,8 +162,8 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
                                  ucell,
                                  kv,
                                  inp.nbands,
-                                 pelec->eferm,
-                                 pelec->ekb,
+                                 output_efermi,
+                                 output_ekb,
                                  pelec->wg,
                                  inp.dos_edelta_ev,
                                  inp.dos_scale,
@@ -199,7 +201,7 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
         std::vector<double> efermis(nspin == 2 ? 2 : 1);
         for (int ispin = 0; ispin < efermis.size(); ispin++)
         {
-            efermis[ispin] = pelec->eferm.get_efval(ispin);
+            efermis[ispin] = output_efermi.get_efval(ispin);
         }
         const int precision = inp.out_dmk[1];
 
@@ -240,7 +242,7 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
         ModuleIO::write_wfc_nao(elecstate::ElecStateLCAO<TK>::out_wfc_lcao,
                                 out_app_flag,
                                 psi[0],
-                                pelec->ekb,
+                                output_ekb,
                                 pelec->wg,
                                 kv.kvec_c,
                                 kv.ik2iktot,
@@ -615,7 +617,7 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
                                        PARAM.globalv.dq,
                                        PARAM.globalv.npol);
             wan.set_tpiba_omega(ucell.tpiba, ucell.omega);
-            wan.calculate(ucell, pelec->ekb, pw_wfc, pw_big, sf, kv, psi, &pv);
+            wan.calculate(ucell, output_ekb, pw_wfc, pw_big, sf, kv, psi, &pv);
         }
         else if (inp.wannier_method == 2)
         {
@@ -633,7 +635,7 @@ void ModuleIO::ctrl_scf_lcao(UnitCell& ucell,
                                  PARAM.globalv.npol,
                                  orb);
 
-            wan.calculate(ucell, gd, pelec->ekb, kv, *psi, &pv);
+            wan.calculate(ucell, gd, output_ekb, kv, *psi, &pv);
         }
         std::cout << FmtCore::format(" >> Finish %s.\n * * * * * *\n", "Wave function to Wannier90");
     }

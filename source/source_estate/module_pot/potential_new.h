@@ -90,6 +90,14 @@ class Potential : public PotBase
         this->td_field_manager_ = field_manager;
     }
 
+    // LCAO output-density normalization metadata. It is not changed by charge mixing.
+    void set_lcao_density_scale(double scale);
+    double get_lcao_density_scale() const;
+    double get_lcao_normalization_energy() const;
+    double get_lcao_energy_reference() const;
+    const double* get_lcao_v(int is) const;
+    double* get_lcao_v(int is);
+
     // interfaces to get values
     ModuleBase::matrix& get_eff_v()
     {
@@ -225,6 +233,7 @@ class Potential : public PotBase
     void interpolate_vrs();
 
     void allocate();
+    void update_lcao_potential(const Charge& charge, double omega);
 
     // the registered PCC component, or nullptr when PCC is off
     const PotPcc* pcc_component() const;
@@ -261,6 +270,12 @@ class Potential : public PotBase
     VSep* vsep_cell = nullptr;
     bool use_gpu_ = false;
     std::shared_ptr<TDFieldManager> td_field_manager_;
+    // Physical v_eff remains available to XC/core terms and potential output.
+    // The separate LCAO buffer is the derivative with respect to raw DMR density.
+    ModuleBase::matrix lcao_v_eff_;
+    double lcao_density_scale_ = 0.0;
+    double lcao_normalization_energy_ = 0.0;
+    double lcao_energy_reference_ = 0.0;
 };
 
 } // namespace elecstate

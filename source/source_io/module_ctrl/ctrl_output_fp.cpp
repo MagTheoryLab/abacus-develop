@@ -62,6 +62,8 @@ void ctrl_output_fp(UnitCell& ucell,
         should_output = true;
     }
 
+    const elecstate::Efermi output_efermi = pelec->get_output_efermi();
+
     // 4) write charge density
     if (inp.out_chg[0] > 0 && should_output)
     {
@@ -89,7 +91,7 @@ void ctrl_output_fp(UnitCell& ucell,
                                           nspin,
                                           istep, // change istep_in to istep, mohan 20260222
                                           fn,
-                                          pelec->eferm.get_efval(is),
+                                          output_efermi.get_efval(is),
                                           &(ucell),
                                           inp.out_chg[1],
                                           1,
@@ -112,7 +114,7 @@ void ctrl_output_fp(UnitCell& ucell,
                                               nspin,
                                               istep,
                                               fn,
-                                              pelec->eferm.get_efval(is),
+                                              output_efermi.get_efval(is),
                                               &(ucell),
                                               11, // default precision
                                               1,  // default out_fermi

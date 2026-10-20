@@ -161,11 +161,23 @@ void ESolver_FP::after_scf(UnitCell& ucell, const int istep, const bool conv_eso
 {
     ModuleBase::TITLE("ESolver_FP", "after_scf");
 
+    std::ofstream& ofs_running = GlobalV::ofs_running;
+
     //! Output convergence information
-    ModuleIO::output_convergence_after_scf(conv_esolver, this->pelec->f_en.etot, GlobalV::ofs_running);
+    ModuleIO::output_convergence_after_scf(conv_esolver, this->pelec->f_en.etot, ofs_running);
 
     //! Write Fermi energy
-    ModuleIO::output_efermi(conv_esolver, this->pelec->eferm, GlobalV::ofs_running);
+    const elecstate::Efermi output_efermi = this->pelec->get_output_efermi();
+    ModuleIO::output_efermi(conv_esolver, output_efermi, ofs_running);
+    const double reference = this->pelec->get_output_energy_reference();
+    if (reference != 0.0)
+    {
+        ofs_running << " LCAO spectrum reference: output = internal + "
+                             << std::setprecision(16) << reference << " Ry (C/N).\n"
+                             << " Physical potential grids retain their original reference.\n"
+                             << " Raw H/S and dH/dS matrix exports retain the internal reference; "
+                             << "H_output = H_internal + (C/N)*S.\n";
+    }
 
     //! Update delta_rho for charge extrapolation
     const module_charge::AtomicRhoCfg atomic_rho_cfg_after{
@@ -178,7 +190,7 @@ void ESolver_FP::after_scf(UnitCell& ucell, const int istep, const bool conv_eso
 
     //! print out charge density, potential, elf, etc.
 	ModuleIO::ctrl_output_fp(ucell, *this->inp_, this->pelec, this->pw_big, this->pw_rhod, 
-			this->chr, this->solvent, this->Pgrid, istep, GlobalV::ofs_running); 
+			this->chr, this->solvent, this->Pgrid, istep, ofs_running);
 
 }
 
@@ -265,7 +277,8 @@ void ESolver_FP::before_scf(UnitCell& ucell, const int istep)
     unitcell::cal_ux(ucell, this->inp_->nspin);
 
     //! output the initial charge density
-    ModuleIO::write_chg_init(ucell, this->Pgrid, this->chr, this->pelec->eferm, istep,
+    const elecstate::Efermi output_efermi = this->pelec->get_output_efermi();
+    ModuleIO::write_chg_init(ucell, this->Pgrid, this->chr, output_efermi, istep,
                              PARAM.globalv.global_out_dir, *this->inp_, PARAM.globalv.two_fermi, GlobalV::ofs_running);
 
     return;

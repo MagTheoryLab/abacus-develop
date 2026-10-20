@@ -20,6 +20,7 @@ void ModuleIO::write_proj_band_lcao(
 {
     ModuleBase::TITLE("ModuleIO", "write_proj_band_lcao");
     ModuleBase::timer::start("ModuleIO", "write_proj_band_lcao");
+    const double energy_reference = pelec->get_output_energy_reference();
 
     GlobalV::ofs_running << "\n";
     GlobalV::ofs_running << " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" << std::endl;
@@ -126,7 +127,7 @@ void ModuleIO::write_proj_band_lcao(
                 << std::endl;
 			for (int ib = 0; ib < PARAM.inp.nbands; ib++) 
 			{
-				out << " " << (pelec->ekb(is * nks, ib)) * ModuleBase::Ry_to_eV;
+				out << " " << (pelec->ekb(is * nks, ib) + energy_reference) * ModuleBase::Ry_to_eV;
 			}
 			out << std::endl;
             out << "</band_structure>" << std::endl;
@@ -193,6 +194,7 @@ void ModuleIO::write_proj_band_lcao(
 {
     ModuleBase::TITLE("ModuleIO", "write_proj_band_lcao");
     ModuleBase::timer::start("ModuleIO", "write_proj_band_lcao");
+    const double energy_reference = pelec->get_output_energy_reference();
 
     GlobalV::ofs_running << "\n";
     GlobalV::ofs_running << " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" << std::endl;
@@ -334,7 +336,7 @@ void ModuleIO::write_proj_band_lcao(
 			for (int ik = 0; ik < nks; ik++)
 			{
 				for (int ib = 0; ib < PARAM.inp.nbands; ib++) {
-					out << " " << (pelec->ekb(ik + is * nks, ib)) * ModuleBase::Ry_to_eV;
+					out << " " << (pelec->ekb(ik + is * nks, ib) + energy_reference) * ModuleBase::Ry_to_eV;
 }
 				out << std::endl;
 			}

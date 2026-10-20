@@ -5,12 +5,14 @@
 #include "source_base/global_function.h"
 #include "source_base/global_variable.h"
 #include "source_base/memory_recorder.h"
+#include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
 #include "source_base/tool_quit.h"
 #include "source_base/tool_title.h"
 #include "source_hamilt/module_xc/xc_functional.h"
 #include "source_io/module_parameter/parameter.h"
 
+#include <cmath>
 #include <map>
 
 namespace elecstate
@@ -166,6 +168,7 @@ void Potential::update_from_charge(const Charge* const chg, const UnitCell* cons
     }
 
     this->cal_v_eff(chg, ucell, this->v_eff);
+    this->update_lcao_potential(*chg, ucell->omega);
 
     // interpolate potential on the smooth mesh if necessary
     this->interpolate_vrs();
@@ -191,6 +194,101 @@ void Potential::update_from_charge(const Charge* const chg, const UnitCell* cons
             castmem_d2s_h2h_op()(s_vofk_smooth, this->vofk_smooth.c, this->vofk_smooth.nr * this->vofk_smooth.nc);
         }
         // There's no need to synchronize memory for double precision pointers while in a CPU environment
+    }
+}
+
+void Potential::set_lcao_density_scale(const double scale)
+{
+    if (!std::isfinite(scale) || scale < 0.0)
+    {
+        ModuleBase::WARNING_QUIT("Potential::set_lcao_density_scale", "Invalid density normalization scale.");
+    }
+    lcao_density_scale_ = scale;
+}
+
+double Potential::get_lcao_density_scale() const
+{
+    return lcao_density_scale_;
+}
+
+double Potential::get_lcao_normalization_energy() const
+{
+    return lcao_normalization_energy_;
+}
+
+// For rho = N*q/Q, dE/dN at fixed q is C/N. Extending N to Tr(P*S)
+// adds (C/N)*S to the fixed-N derivative without changing its eigenvectors.
+// Apply that reference only to reported spectra, never to grid u or force terms.
+double Potential::get_lcao_energy_reference() const
+{
+    return lcao_energy_reference_;
+}
+
+const double* Potential::get_lcao_v(const int is) const
+{
+    if (lcao_density_scale_ == 0.0 || lcao_v_eff_.nc == 0)
+    {
+        return get_eff_v(is);
+    }
+    return &lcao_v_eff_(is, 0);
+}
+
+double* Potential::get_lcao_v(const int is)
+{
+    return const_cast<double*>(static_cast<const Potential*>(this)->get_lcao_v(is));
+}
+
+void Potential::update_lcao_potential(const Charge& charge, const double omega)
+{
+    lcao_normalization_energy_ = 0.0;
+    lcao_energy_reference_ = 0.0;
+    if (lcao_density_scale_ == 0.0)
+    {
+        return;
+    }
+    // rho = alpha*q, alpha = N / integral(q_charge). Pull back the
+    // physical density potential to the unnormalized orbital density q:
+    // u_charge = alpha*(v_charge-C/N), u_mag = alpha*v_mag,
+    // C = integral(sum_s rho_s*v_s). Only charge channels receive the shift.
+    double nelec = 0.0;
+    double contraction = 0.0;
+    for (int is = 0; is < v_eff.nr; ++is)
+    {
+        for (int ir = 0; ir < v_eff.nc; ++ir)
+        {
+            contraction += charge.rho[is][ir] * v_eff(is, ir);
+            if (is == 0 || v_eff.nr == 2)
+            {
+                nelec += charge.rho[is][ir];
+            }
+        }
+    }
+#ifdef __MPI
+    Parallel_Reduce::reduce_pool(contraction);
+    Parallel_Reduce::reduce_pool(nelec);
+#endif
+    contraction *= omega / charge.rhopw->nxyz;
+    nelec *= omega / charge.rhopw->nxyz;
+    if (!std::isfinite(nelec) || nelec <= 0.0)
+    {
+        ModuleBase::WARNING_QUIT("Potential::update_lcao_potential", "Invalid normalized electron count.");
+    }
+    const double average = contraction / nelec;
+    lcao_energy_reference_ = average;
+    lcao_normalization_energy_ = contraction;
+    lcao_v_eff_.create(v_eff.nr, v_eff.nc);
+    for (int is = 0; is < v_eff.nr; ++is)
+    {
+        const bool charge_channel = is == 0 || v_eff.nr == 2;
+        double shift = 0.0;
+        if (charge_channel)
+        {
+            shift = average;
+        }
+        for (int ir = 0; ir < v_eff.nc; ++ir)
+        {
+            lcao_v_eff_(is, ir) = lcao_density_scale_ * (v_eff(is, ir) - shift);
+        }
     }
 }
 

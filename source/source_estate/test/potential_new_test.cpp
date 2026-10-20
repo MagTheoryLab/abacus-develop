@@ -12,9 +12,9 @@
 class TestParameters
 {
   public:
-    static void reset()
+    static void reset(const int nspin)
     {
-        PARAM.input.nspin = 1;
+        PARAM.input.nspin = nspin;
         PARAM.input.basis_type = "pw";
         PARAM.input.device = "cpu";
         PARAM.input.precision = "double";
@@ -100,7 +100,7 @@ class MockPotComponent : public PotBase
     MockPotComponent(const std::string& type, const int grid_size) : type_(type), grid_size_(grid_size)
     {
         this->fixed_mode = (type == "fixed");
-        this->dynamic_mode = (type == "dynamic" || type == "ramp");
+        this->dynamic_mode = (type == "dynamic" || type == "ramp" || type == "quadratic");
         ++created;
     }
 
@@ -125,7 +125,14 @@ class MockPotComponent : public PotBase
         {
             for (int ir = 0; ir < v_eff.nc; ++ir)
             {
-                v_eff(is, ir) += (type_ == "ramp" ? is + ir : dynamic_calls);
+                if (type_ == "quadratic")
+                {
+                    v_eff(is, ir) += chg->rho[is][ir];
+                }
+                else
+                {
+                    v_eff(is, ir) += (type_ == "ramp" ? is + ir : dynamic_calls);
+                }
             }
         }
     }
@@ -166,7 +173,7 @@ class PotentialNewTest : public ::testing::Test
   protected:
     void SetUp() override
     {
-        TestParameters::reset();
+        TestParameters::reset(1);
         XC_Functional::set_xc_type("lda");
         elecstate::MockPotComponent::reset();
 
@@ -184,7 +191,7 @@ class PotentialNewTest : public ::testing::Test
     {
         potential.reset();
         XC_Functional::set_xc_type("lda");
-        TestParameters::reset();
+        TestParameters::reset(1);
         elecstate::MockPotComponent::reset();
     }
 
@@ -410,4 +417,130 @@ TEST_F(PotentialNewTest, DifferentBasisObjectsRequireMatchingGammaOnly)
     Charge charge;
 
     EXPECT_EXIT(potential->update_from_charge(&charge, ucell.get()), ::testing::ExitedWithCode(1), "");
+}
+
+// Independent discrete functional: a fixed local potential plus a quadratic
+// density energy. Differentiate its normalized energy, not the pullback formula.
+TEST_F(PotentialNewTest, NormalizedDensityPotentialMatchesEnergyDerivatives)
+{
+    setup_smooth_basis();
+    const int size = smooth_basis->nrxx;
+    for (const int nspin : {1, 2, 4})
+    {
+        TestParameters::reset(nspin);
+        create_potential(smooth_basis.get(), smooth_basis.get());
+        potential->pot_register({"fixed", "quadratic"});
+        std::vector<std::vector<double>> raw(nspin, std::vector<double>(size));
+        std::vector<std::vector<double>> normalized = raw;
+        std::vector<double*> rows(nspin);
+        for (int is = 0; is < nspin; ++is)
+        {
+            rows[is] = normalized[is].data();
+            for (int ir = 0; ir < size; ++ir)
+            {
+                raw[is][ir] = 0.2 + 0.01 * (ir % 7) + 0.02 * is;
+            }
+        }
+        Charge charge;
+        charge.nspin = nspin;
+        charge.nrxx = size;
+        charge.rho = rows.data();
+        charge.rhopw = smooth_basis.get();
+        double target = 3.0;
+        const auto energy = [&](const double volume, const bool update) {
+            const double weight = volume / smooth_basis->nxyz;
+            double count = 0.0;
+            for (int is = 0; is < nspin; ++is)
+            {
+                if (is == 0 || nspin == 2)
+                {
+                    for (const double value : raw[is])
+                    {
+                        count += weight * value;
+                    }
+                }
+            }
+            const double scale = target / count;
+            double result = 0.0;
+            for (int is = 0; is < nspin; ++is)
+            {
+                for (int ir = 0; ir < size; ++ir)
+                {
+                    const double rho = scale * raw[is][ir];
+                    normalized[is][ir] = rho;
+                    result += weight * 0.5 * rho * rho;
+                    if (is == 0 || nspin == 2)
+                    {
+                        result += weight * 2.0 * rho;
+                    }
+                }
+            }
+            if (update)
+            {
+                ucell->omega = volume;
+                potential->set_lcao_density_scale(scale);
+                potential->update_from_charge(&charge, ucell.get());
+            }
+            return result;
+        };
+        const double volume = 8.0;
+        const double center = energy(volume, true);
+        const double step = 1.0e-5;
+        double radial_derivative = 0.0;
+        for (int is = 0; is < nspin; ++is)
+        {
+            for (int ir = 0; ir < size; ++ir)
+            {
+                radial_derivative += raw[is][ir] * potential->get_lcao_v(is)[ir];
+            }
+            const int ir = size / 2;
+            const double predicted = volume / smooth_basis->nxyz * potential->get_lcao_v(is)[ir];
+            raw[is][ir] += step;
+            const double plus = energy(volume, false);
+            raw[is][ir] -= 2.0 * step;
+            const double minus = energy(volume, false);
+            raw[is][ir] += step;
+            EXPECT_NEAR((plus - minus) / (2.0 * step), predicted, 2.0e-8);
+        }
+        EXPECT_NEAR(radial_derivative, 0.0, 1.0e-10);
+        // Explicit quadrature-weight stress plus the normalization chain rule.
+        const double explicit_stress = -center / volume;
+        const double chain_stress = potential->get_lcao_normalization_energy() / volume;
+        const double plus = energy(volume + step, false);
+        const double minus = energy(volume - step, false);
+        EXPECT_NEAR(-(plus - minus) / (2.0 * step), explicit_stress + chain_stress, 2.0e-8);
+        // The output offset is the derivative with respect to the target N.
+        energy(volume, true);
+        const double reference = potential->get_lcao_energy_reference();
+        target += step;
+        const double number_plus = energy(volume, false);
+        target -= 2.0 * step;
+        const double number_minus = energy(volume, false);
+        target += step;
+        EXPECT_NEAR((number_plus - number_minus) / (2.0 * step), reference, 2.0e-8);
+        energy(volume, true);
+        std::vector<std::vector<double>> mapped(nspin, std::vector<double>(size));
+        for (int is = 0; is < nspin; ++is)
+        {
+            std::copy(potential->get_lcao_v(is), potential->get_lcao_v(is) + size, mapped[is].begin());
+        }
+        // Removing a uniform +2 Ry scalar potential changes the output offset
+        // by -2 Ry, but leaves the internal normalized-density Hamiltonian intact.
+        potential->pot_register({"quadratic"});
+        potential->init_pot(&charge);
+        EXPECT_NEAR(potential->get_lcao_energy_reference(), reference - 2.0, 1.0e-12);
+        for (int is = 0; is < nspin; ++is)
+        {
+            for (int ir = 0; ir < size; ++ir)
+            {
+                EXPECT_NEAR(potential->get_lcao_v(is)[ir], mapped[is][ir], 1.0e-12);
+                EXPECT_NEAR(potential->get_eff_v(is)[ir], normalized[is][ir], 1.0e-12);
+            }
+        }
+        potential->set_lcao_density_scale(0.0);
+        potential->update_from_charge(&charge, ucell.get());
+        EXPECT_DOUBLE_EQ(potential->get_lcao_energy_reference(), 0.0);
+        EXPECT_EQ(potential->get_lcao_v(0), potential->get_eff_v(0));
+        charge.rho = nullptr;
+    }
 }

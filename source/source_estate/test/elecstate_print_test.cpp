@@ -321,3 +321,42 @@ TEST_F(ElecStatePrintTest, PrintEtotSDFTMixed)
 
     delete elecstate.charge;
 }
+
+TEST_F(ElecStatePrintTest, OutputReferenceLeavesInternalSpectrumAndOccupationsUnchanged)
+{
+    elecstate.eferm.ef = 2.4;
+    elecstate.eferm.ef_up = 2.1;
+    elecstate.eferm.ef_dw = 3.2;
+    elecstate.f_en.eband = -17.0;
+    const double shift = -7.3;
+    for (const bool two : {false, true})
+    {
+        elecstate.eferm.two_efermi = two;
+        elecstate.set_output_energy_reference(shift);
+        const auto output_fermi = elecstate.get_output_efermi();
+        const auto output_eigenvalues = elecstate.get_output_eigenvalues();
+        EXPECT_EQ(output_fermi.two_efermi, two);
+        EXPECT_DOUBLE_EQ(output_fermi.ef, 2.4 + shift);
+        EXPECT_DOUBLE_EQ(output_fermi.ef_up, 2.1 + shift);
+        EXPECT_DOUBLE_EQ(output_fermi.ef_dw, 3.2 + shift);
+        for (int ik = 0; ik < 2; ++ik)
+        {
+            for (int ib = 0; ib < 2; ++ib)
+            {
+                const double original = 1.0 + 2 * ik + ib;
+                EXPECT_DOUBLE_EQ(elecstate.ekb(ik, ib), original);
+                EXPECT_DOUBLE_EQ(output_eigenvalues(ik, ib), original + shift);
+                EXPECT_NEAR(output_eigenvalues(ik, ib) - output_fermi.ef,
+                            original - elecstate.eferm.ef, 1.0e-14);
+                EXPECT_NEAR(elecstate.wg(ik, ib), 0.1 * original, 1.0e-15);
+            }
+        }
+        EXPECT_DOUBLE_EQ(elecstate.eferm.ef, 2.4);
+        EXPECT_DOUBLE_EQ(elecstate.f_en.eband, -17.0);
+        elecstate.set_output_energy_reference(0.0);
+        const auto unshifted = elecstate.get_output_eigenvalues();
+        EXPECT_DOUBLE_EQ(unshifted(0, 0), elecstate.ekb(0, 0));
+        // Previously returned values own their data and retain their snapshot.
+        EXPECT_DOUBLE_EQ(output_eigenvalues(0, 0), 1.0 + shift);
+    }
+}

@@ -978,7 +978,8 @@ __global__ void cal_stress_onsite(
                 const thrust::complex<FPTYPE> dbb1 = conj(dbecp[inkb1]) * becp[inkb2 + nkb];
                 const thrust::complex<FPTYPE> dbb2 = conj(dbecp[inkb1 + nkb]) * becp[inkb2];
                 const thrust::complex<FPTYPE> dbb3 = conj(dbecp[inkb1 + nkb]) * becp[inkb2 + nkb];
-                stress_var -= fac * (ps[0] * dbb0 + ps[1] * dbb1 + ps[2] * dbb2 + ps[3] * dbb3).real();
+                // U spin blocks are [up-up, down-up, up-down, down-down], as in onsite_op.
+                stress_var -= fac * (ps[0] * dbb0 + ps[2] * dbb1 + ps[1] * dbb2 + ps[3] * dbb3).real();
             }
             else
             {

@@ -1,6 +1,6 @@
 AddTest(
     TARGET deltaspin_force_cpu_test
-    SOURCES test_force_op.cpp ../force_op.cpp
+    SOURCES test_force_op.cpp ../force_op.cpp ../stress_op.cpp
 )
 
 AddTest(
@@ -13,7 +13,7 @@ AddTest(
     TARGET deltaspin_force_gpu_test
     LIBS CUDA::cudart
     KEEP_FEATURE_DEFINITIONS __CUDA
-    SOURCES test_force_op.cpp ../force_op.cpp ../cuda/force_op.cu
+    SOURCES test_force_op.cpp ../force_op.cpp ../stress_op.cpp ../cuda/force_op.cu ../cuda/stress_op.cu
 )
 endif()
 

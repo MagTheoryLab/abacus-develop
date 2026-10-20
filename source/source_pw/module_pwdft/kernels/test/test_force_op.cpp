@@ -1,4 +1,5 @@
 #include "source_pw/module_pwdft/kernels/force_op.h"
+#include "source_pw/module_pwdft/kernels/stress_op.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -10,6 +11,107 @@
 
 namespace
 {
+// U stores spin blocks column-major. Check both contractions against an
+// independent Pauli energy, including the imaginary off-diagonal (y) channel.
+void check_u_derivatives(const bool gpu)
+{
+    int host_meta[3] = {1, 1, 0}; // nh, na, l=0
+    double host_real[5] = {0.7, 0.125, 0.125, 0.125, 0.125}; // weight, force, stress
+    std::complex<double> host_complex[12]; // potential, overlap, three derivatives
+    int* meta = host_meta;
+    double* real = host_real;
+    std::complex<double>* data = host_complex;
+#ifdef __CUDA
+    if (gpu)
+    {
+        ASSERT_EQ(cudaSuccess, cudaMallocManaged(&meta, sizeof(host_meta)));
+        ASSERT_EQ(cudaSuccess, cudaMallocManaged(&real, sizeof(host_real)));
+        ASSERT_EQ(cudaSuccess, cudaMallocManaged(&data, sizeof(host_complex)));
+    }
+#endif
+    std::copy(host_meta, host_meta + 3, meta);
+    double* force = real + 1;
+    double* stress = real + 4;
+    const int* na = meta + 1;
+    const int* l = meta + 2;
+    std::complex<double>* b = data + 4;
+    std::complex<double>* db = data + 6;
+    b[0] = {0.3, -0.2};
+    b[1] = {-0.1, 0.4};
+    for (int i = 0; i < 6; ++i)
+    {
+        db[i] = {0.07 + 0.03 * i, -0.11 + 0.02 * i};
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        real[0] = 0.7;
+        std::fill(real + 1, real + 5, 0.125);
+        double v[3] = {0, 0, 0};
+        v[axis] = 0.4;
+        data[0] = 0.23 + v[2];
+        data[1] = {v[0], v[1]};
+        data[2] = std::conj(data[1]);
+        data[3] = 0.23 - v[2];
+        if (!gpu)
+        {
+            hamilt::cal_force_nl_op<double, base_device::DEVICE_CPU>()(
+                nullptr, 1, 1, 1, 3, 1, 0, 1, 2, meta, na, 1.7,
+                real, data, l, b, db, force);
+            hamilt::cal_stress_nl_op<double, base_device::DEVICE_CPU>()(
+                nullptr, 1, 1, 1, 1, 0, 2, meta, na, real, data, l, b, db, stress);
+        }
+#ifdef __CUDA
+        else
+        {
+            hamilt::cal_force_nl_op<double, base_device::DEVICE_GPU>()(
+                nullptr, 1, 1, 1, 3, 1, 0, 1, 2, meta, na, 1.7,
+                real, data, l, b, db, force);
+            hamilt::cal_stress_nl_op<double, base_device::DEVICE_GPU>()(
+                nullptr, 1, 1, 1, 1, 0, 2, meta, na, real, data, l, b, db, stress);
+            ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        }
+#endif
+        for (int dir = 0; dir < 3; ++dir)
+        {
+            const auto energy = [&](const double h)
+            {
+                const auto up = b[0] + h * db[2 * dir];
+                const auto down = b[1] + h * db[2 * dir + 1];
+                const auto cross = std::conj(up) * down;
+                return real[0] * (0.23 * (std::norm(up) + std::norm(down))
+                    + 2 * v[0] * cross.real() + 2 * v[1] * cross.imag()
+                    + v[2] * (std::norm(up) - std::norm(down)));
+            };
+            const double derivative = (energy(1e-4) - energy(-1e-4)) / 2e-4;
+            EXPECT_NEAR(force[dir] - 0.125, -1.7 * derivative, 1e-11) << axis;
+            if (dir == 0)
+            {
+                // Stress kernel carries one of the two projector derivatives.
+                EXPECT_NEAR(*stress - 0.125, -0.5 * derivative, 1e-11) << axis;
+            }
+        }
+    }
+#ifdef __CUDA
+    if (gpu)
+    {
+        EXPECT_EQ(cudaSuccess, cudaFree(data));
+        EXPECT_EQ(cudaSuccess, cudaFree(real));
+        EXPECT_EQ(cudaSuccess, cudaFree(meta));
+    }
+#endif
+}
+
+TEST(PwUForceStress, CpuPauliEnergyDerivative)
+{
+    check_u_derivatives(false);
+}
+#ifdef __CUDA
+TEST(PwUForceStress, GpuPauliEnergyDerivative)
+{
+    check_u_derivatives(true);
+}
+#endif
+
 template <typename Real>
 struct DeltaSpinFixture
 {

@@ -37,7 +37,7 @@ Complex reference(int row, int col, const ModuleBase::Vector3<int>& R,
     return result;
 }
 
-void check_contraction(int nlocal)
+void check_contraction(int nlocal, int owner_ranks)
 {
     const int nk = 3; // A four-rank run includes a rank with no owned k point.
     const int nbands = 3;
@@ -66,7 +66,7 @@ void check_contraction(int nlocal)
     std::vector<const psi::Psi<Complex, base_device::DEVICE_GPU>*> view(nk, nullptr);
     for (int ik = 0; ik < nk; ++ik)
     {
-        if (ik % test_ranks != test_rank)
+        if (ik % owner_ranks != test_rank)
         {
             continue;
         }
@@ -132,12 +132,17 @@ void check_contraction(int nlocal)
 
 TEST(KOwnerDMR, ComplexAndEnergyWeightedAgainstScalarOracle)
 {
-    check_contraction(12);
+    check_contraction(12, test_ranks);
 }
 
 TEST(KOwnerDMR, EmptyLocalBlocksParticipate)
 {
-    check_contraction(2);
+    check_contraction(2, test_ranks);
+}
+
+TEST(KOwnerDMR, SingleOwnerContributesToEveryRank)
+{
+    check_contraction(12, 1);
 }
 
 int main(int argc, char** argv)

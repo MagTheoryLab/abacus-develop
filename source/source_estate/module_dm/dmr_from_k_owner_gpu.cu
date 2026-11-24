@@ -8,6 +8,7 @@
 #include <base/macros/macros.h>
 #include <thrust/complex.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -109,6 +110,110 @@ __global__ void dense_dmk_to_sparse_dmr_kernel(const int output_size,
     {
         dmr[index] += up_up.real() - down_down.real();
     }
+}
+
+template <int scalars_per_element>
+void compute_dmr_from_k_owner_gpu(
+    const int nlocal,
+    const ModuleBase::matrix& wg,
+    const std::vector<const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>*>& owner_wfc,
+    const std::vector<ModuleBase::Vector3<double>>& kvec_d,
+    const std::vector<int>& blocks,
+    const std::vector<int>& orbital_indices,
+    const std::vector<ModuleBase::Vector3<int>>& block_R,
+    std::vector<double>& sparse_contribution)
+{
+    const int nbands = wg.nc;
+    const int scalar_count = static_cast<int>(sparse_contribution.size());
+    const int global_nnr = scalar_count / scalars_per_element;
+    const int wfc_size = nlocal * nbands;
+    const int dmk_size = nlocal * nlocal;
+    std::complex<double>* weighted_wfc_device = nullptr;
+    std::complex<double>* dmk_device = nullptr;
+    std::complex<double>* phases_device = nullptr;
+    int* blocks_device = nullptr;
+    int* orbital_indices_device = nullptr;
+    double* weights_device = nullptr;
+    double* dmr_device = nullptr;
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(weighted_wfc_device, wfc_size);
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dmk_device, dmk_size);
+    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phases_device, block_R.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(blocks_device, blocks.size());
+    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(orbital_indices_device, orbital_indices.size());
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(weights_device, nbands);
+    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(dmr_device, scalar_count);
+    base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        blocks_device, blocks.data(), blocks.size());
+    base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+        orbital_indices_device, orbital_indices.data(), orbital_indices.size());
+    CHECK_CUDA(cudaMemset(dmr_device, 0, static_cast<std::size_t>(scalar_count) * sizeof(double)));
+
+    std::vector<double> weights(nbands, 0.0);
+    std::vector<std::complex<double>> phases(block_R.size());
+    const std::complex<double> one(1.0, 0.0);
+    const std::complex<double> zero(0.0, 0.0);
+    const char normal = 'N';
+    const char transpose = 'T';
+    const int threads = 256;
+    const int grid = (global_nnr + threads - 1) / threads;
+
+    for (int ik = 0; ik < static_cast<int>(owner_wfc.size()); ++ik)
+    {
+        if (owner_wfc[ik] == nullptr)
+        {
+            continue;
+        }
+        for (int ib = 0; ib < nbands; ++ib)
+        {
+            weights[ib] = wg(ik, ib);
+        }
+        for (int iblock = 0; iblock < static_cast<int>(block_R.size()); ++iblock)
+        {
+            const double k_dot_R = kvec_d[ik].x * block_R[iblock].x
+                                   + kvec_d[ik].y * block_R[iblock].y
+                                   + kvec_d[ik].z * block_R[iblock].z;
+            const double arg = k_dot_R * ModuleBase::TWO_PI;
+            phases[iblock] = std::complex<double>(std::cos(arg), std::sin(arg));
+        }
+        base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+            weights_device, weights.data(), nbands);
+        base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
+            phases_device, phases.data(), phases.size());
+
+        const std::complex<double>* wfc_device = owner_wfc[ik]->get_pointer();
+        const int wfc_threads = 256;
+        const int wfc_blocks = (wfc_size + wfc_threads - 1) / wfc_threads;
+        weight_conjugate_wfc_kernel<<<wfc_blocks, wfc_threads>>>(
+            wfc_size,
+            nlocal,
+            reinterpret_cast<const thrust::complex<double>*>(wfc_device),
+            weights_device,
+            reinterpret_cast<thrust::complex<double>*>(weighted_wfc_device));
+        CHECK_CUDA(cudaGetLastError());
+        ModuleBase::gemm_op<std::complex<double>, base_device::DEVICE_GPU>()(
+            normal, transpose, nlocal, nlocal, nbands, &one,
+            weighted_wfc_device, nlocal, wfc_device, nlocal, &zero, dmk_device, nlocal);
+        dense_dmk_to_sparse_dmr_kernel<scalars_per_element == 2><<<grid, threads>>>(
+            global_nnr,
+            nlocal,
+            reinterpret_cast<const thrust::complex<double>*>(dmk_device),
+            blocks_device,
+            static_cast<int>(block_R.size()),
+            orbital_indices_device,
+            reinterpret_cast<const thrust::complex<double>*>(phases_device),
+            dmr_device);
+        CHECK_CUDA(cudaGetLastError());
+    }
+
+    base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
+        sparse_contribution.data(), dmr_device, scalar_count);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(weighted_wfc_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dmk_device);
+    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phases_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(blocks_device);
+    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(orbital_indices_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(weights_device);
+    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(dmr_device);
 }
 
 template <typename TR>
@@ -304,93 +409,19 @@ void dmr_from_k_owner_gpu_impl(
     {
         throw std::runtime_error("k-owner dense GPU workspace exceeds 32-bit indexing");
     }
-    const int wfc_size = nlocal * nbands;
-    const int dmk_size = nlocal * nlocal;
     if (global_nnr > std::numeric_limits<int>::max() / scalars_per_element)
     {
         throw std::runtime_error("complex sparse DMR exceeds 32-bit MPI counts");
     }
     const int scalar_count = global_nnr * scalars_per_element;
-    std::complex<double>* weighted_wfc_device = nullptr;
-    std::complex<double>* dmk_device = nullptr;
-    std::complex<double>* phases_device = nullptr;
-    int* blocks_device = nullptr;
-    int* orbital_indices_device = nullptr;
-    double* weights_device = nullptr;
-    double* dmr_device = nullptr;
-    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(weighted_wfc_device, wfc_size);
-    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dmk_device, dmk_size);
-    base_device::memory::resize_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phases_device, block_R.size());
-    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(blocks_device, blocks.size());
-    base_device::memory::resize_memory_op<int, base_device::DEVICE_GPU>()(orbital_indices_device, orbital_indices.size());
-    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(weights_device, nbands);
-    base_device::memory::resize_memory_op<double, base_device::DEVICE_GPU>()(dmr_device, scalar_count);
-    base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
-        blocks_device, blocks.data(), blocks.size());
-    base_device::memory::synchronize_memory_op<int, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
-        orbital_indices_device, orbital_indices.data(), orbital_indices.size());
-    CHECK_CUDA(cudaMemset(dmr_device, 0, static_cast<std::size_t>(scalar_count) * sizeof(double)));
-
-    std::vector<double> weights(nbands, 0.0);
-    std::vector<std::complex<double>> phases(block_R.size());
-    const std::complex<double> one(1.0, 0.0);
-    const std::complex<double> zero(0.0, 0.0);
-    const char normal = 'N';
-    const char transpose = 'T';
-    const int threads = 256;
-    const int grid = (global_nnr + threads - 1) / threads;
-
-    for (int ik = 0; ik < static_cast<int>(owner_wfc.size()); ++ik)
-    {
-        if (owner_wfc[ik] == nullptr)
-        {
-            continue;
-        }
-        for (int ib = 0; ib < nbands; ++ib)
-        {
-            weights[ib] = wg(ik, ib);
-        }
-        for (int iblock = 0; iblock < static_cast<int>(block_R.size()); ++iblock)
-        {
-            const double k_dot_R = kvec_d[ik].x * block_R[iblock].x
-                                   + kvec_d[ik].y * block_R[iblock].y
-                                   + kvec_d[ik].z * block_R[iblock].z;
-            const double arg = k_dot_R * ModuleBase::TWO_PI;
-            phases[iblock] = std::complex<double>(std::cos(arg), std::sin(arg));
-        }
-        base_device::memory::synchronize_memory_op<double, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
-            weights_device, weights.data(), nbands);
-        base_device::memory::synchronize_memory_op<std::complex<double>, base_device::DEVICE_GPU, base_device::DEVICE_CPU>()(
-            phases_device, phases.data(), phases.size());
-
-        const std::complex<double>* wfc_device = owner_wfc[ik]->get_pointer();
-        const int wfc_threads = 256;
-        const int wfc_blocks = (wfc_size + wfc_threads - 1) / wfc_threads;
-        weight_conjugate_wfc_kernel<<<wfc_blocks, wfc_threads>>>(
-            wfc_size,
-            nlocal,
-            reinterpret_cast<const thrust::complex<double>*>(wfc_device),
-            weights_device,
-            reinterpret_cast<thrust::complex<double>*>(weighted_wfc_device));
-        CHECK_CUDA(cudaGetLastError());
-        ModuleBase::gemm_op<std::complex<double>, base_device::DEVICE_GPU>()(
-            normal, transpose, nlocal, nlocal, nbands, &one,
-            weighted_wfc_device, nlocal, wfc_device, nlocal, &zero, dmk_device, nlocal);
-        dense_dmk_to_sparse_dmr_kernel<scalars_per_element == 2><<<grid, threads>>>(
-            global_nnr,
-            nlocal,
-            reinterpret_cast<const thrust::complex<double>*>(dmk_device),
-            blocks_device,
-            static_cast<int>(block_R.size()),
-            orbital_indices_device,
-            reinterpret_cast<const thrust::complex<double>*>(phases_device),
-            dmr_device);
-        CHECK_CUDA(cudaGetLastError());
-    }
-
     std::vector<double> sparse_contribution(scalar_count, 0.0);
-    base_device::memory::synchronize_memory_op<double, base_device::DEVICE_CPU, base_device::DEVICE_GPU>()(
-        sparse_contribution.data(), dmr_device, scalar_count);
+    const bool has_owned_k = std::any_of(owner_wfc.begin(), owner_wfc.end(),
+                                         [](const psi::Psi<std::complex<double>, base_device::DEVICE_GPU>* wfc) { return wfc != nullptr; });
+    if (has_owned_k)
+    {
+        compute_dmr_from_k_owner_gpu<scalars_per_element>(nlocal, wg, owner_wfc, kvec_d, blocks,
+                                                          orbital_indices, block_R, sparse_contribution);
+    }
     local_dmr->set_zero();
     for (auto& count : recvcounts)
     {
@@ -400,14 +431,6 @@ void dmr_from_k_owner_gpu_impl(
                                            reinterpret_cast<double*>(local_dmr->get_wrapper()),
                                            recvcounts.data(),
                                            MPI_COMM_WORLD);
-
-    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(weighted_wfc_device);
-    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(dmk_device);
-    base_device::memory::delete_memory_op<std::complex<double>, base_device::DEVICE_GPU>()(phases_device);
-    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(blocks_device);
-    base_device::memory::delete_memory_op<int, base_device::DEVICE_GPU>()(orbital_indices_device);
-    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(weights_device);
-    base_device::memory::delete_memory_op<double, base_device::DEVICE_GPU>()(dmr_device);
 
     ModuleBase::timer::end("elecstate", "dmr_from_k_owner_gpu");
 }

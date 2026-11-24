@@ -35,6 +35,7 @@ void check_owners(int owner_count)
     EXPECT_EQ(gather.s_device() != nullptr, receives_matrices);
     std::vector<Complex> h(layout.get_local_size());
     std::vector<Complex> s(h.size());
+    Diag_Cusolver_gvd solver;
     for (int pass = 0; pass < 3; ++pass)
     {
         for (int c = 0; c < layout.get_col_size(); ++c)
@@ -55,21 +56,30 @@ void check_owners(int owner_count)
             CHECK_CUDA(cudaMemcpy(full_h.data(), gather.h_device(), n * n * sizeof(Complex), cudaMemcpyDeviceToHost));
             CHECK_CUDA(cudaMemcpy(full_s.data(), gather.s_device(), n * n * sizeof(Complex), cudaMemcpyDeviceToHost));
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i)
+                for (int i = 0; i <= j; ++i)
                 {
-                    EXPECT_EQ(full_h[j * n + i], i <= j ? h_value(i, j, pass) : Complex(0.0));
-                    EXPECT_EQ(full_s[j * n + i], i <= j ? s_value(i, j) : Complex(0.0));
+                    EXPECT_EQ(full_h[j * n + i], h_value(i, j, pass));
+                    EXPECT_EQ(full_s[j * n + i], s_value(i, j));
                 }
+            const int nvec = n - pass;
             Complex* vectors_device = nullptr;
-            CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&vectors_device), n * n * sizeof(Complex)));
+            const size_t bytes = n * nvec * sizeof(Complex);
+            CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&vectors_device), bytes));
             std::vector<double> eigen(n);
-            Diag_Cusolver_gvd solver;
-            solver.Dngvd_device_input(n, gather.h_device(), gather.s_device(), eigen.data(), vectors_device, n);
-            std::vector<Complex> vectors(n * n);
-            CHECK_CUDA(cudaMemcpy(vectors.data(), vectors_device, n * n * sizeof(Complex), cudaMemcpyDeviceToHost));
+            if (pass == 1)
+            {
+                // The shared solver can also accept host matrices at the same dimension.
+                solver.Dngvd_complex_device(n, n, full_h.data(), full_s.data(), eigen.data(), vectors_device, nvec);
+            }
+            else
+            {
+                solver.Dngvd_device_inplace(n, gather.h_device(), gather.s_device(), eigen.data(), vectors_device, nvec);
+            }
+            std::vector<Complex> vectors(n * nvec);
+            CHECK_CUDA(cudaMemcpy(vectors.data(), vectors_device, bytes, cudaMemcpyDeviceToHost));
             CHECK_CUDA(cudaFree(vectors_device));
             // Independent scalar generalized-eigenvector residual (no packing helper).
-            for (int band = 0; band < n; ++band)
+            for (int band = 0; band < nvec; ++band)
                 for (int i = 0; i < n; ++i)
                 {
                     Complex residual = 0.0;

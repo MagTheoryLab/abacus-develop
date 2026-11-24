@@ -599,7 +599,7 @@ void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
                 psi_local_device->resize(1, nbands, nrow);
                 if (device_matrices)
                 {
-                    this->solve_context_->cusolver->diag_device_input(
+                    this->solve_context_->cusolver->diag_device_inplace(
                         reinterpret_cast<T*>(device_matrices->h_device()),
                         reinterpret_cast<T*>(device_matrices->s_device()),
                         *psi_local_device,

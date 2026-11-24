@@ -23,7 +23,6 @@ Diag_Cusolver_gvd::Diag_Cusolver_gvd(){
     d_W = NULL;
     devInfo = NULL;
 
-    lwork = 0;
     info_gpu = 0;
     is_init = 0;
 }
@@ -40,7 +39,8 @@ void Diag_Cusolver_gvd::finalize(){
     if (devInfo  ) {CHECK_CUDA( cudaFree(devInfo) );   devInfo = NULL;}
     m = 0;
     lda = 0;
-    lwork = 0;
+    lwork_double = 0;
+    lwork_complex = 0;
 }
 
 Diag_Cusolver_gvd::~Diag_Cusolver_gvd(){
@@ -50,41 +50,43 @@ Diag_Cusolver_gvd::~Diag_Cusolver_gvd(){
 }
 
 
-void Diag_Cusolver_gvd::init_double(int N){
-// step 2: Malloc A and B on device
+void Diag_Cusolver_gvd::prepare_dimension(int N)
+{
+    if (N == m && d_W != nullptr)
+    {
+        return;
+    }
+    this->finalize();
     m = lda = N;
-    CHECK_CUDA( cudaMalloc ((void**)&d_A, sizeof(double) * lda * m) );
-    CHECK_CUDA( cudaMalloc ((void**)&d_B, sizeof(double) * lda * m) );
     CHECK_CUDA( cudaMalloc ((void**)&d_W, sizeof(double) * m) );
     CHECK_CUDA( cudaMalloc ((void**)&devInfo, sizeof(int)) );
 }
 
-void Diag_Cusolver_gvd::init_complex(int N){
-// step 2: Malloc A and B on device
-    m = lda = N;
-    CHECK_CUDA( cudaMalloc ((void**)&d_A2, sizeof(cuDoubleComplex) * lda * m) );
-    CHECK_CUDA( cudaMalloc ((void**)&d_B2, sizeof(cuDoubleComplex) * lda * m) );
-    CHECK_CUDA( cudaMalloc ((void**)&d_W, sizeof(double) * m) );
-    CHECK_CUDA( cudaMalloc ((void**)&devInfo, sizeof(int)) );
-}
-        
-void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double* W, cudaMemcpyKind input_copy)
+void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double* W)
 {
     assert(N == M);
-    if (M != m) {
-        this->finalize();
-        this->init_double(M);
+    this->prepare_dimension(M);
+    const size_t bytes = sizeof(double) * lda * m;
+    if (d_A == nullptr)
+    {
+        CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&d_A), bytes));
+        CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&d_B), bytes));
     }
-    CHECK_CUDA(cudaMemcpy(d_A, A, sizeof(double) * lda * m, input_copy));
-    CHECK_CUDA(cudaMemcpy(d_B, B, sizeof(double) * lda * m, input_copy));
+    CHECK_CUDA(cudaMemcpy(d_A, A, bytes, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_B, B, bytes, cudaMemcpyHostToDevice));
+    this->solve_double_inplace(d_A, d_B, W);
+}
+
+void Diag_Cusolver_gvd::solve_double_inplace(double* A, double* B, double* W)
+{
     if (d_work == nullptr)
     {
         CHECK_CUSOLVER(cusolverDnDsygvd_bufferSize(
-            cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, &lwork));
-        CHECK_CUDA(cudaMalloc((void**)&d_work, sizeof(double) * lwork));
+            cusolverH, itype, jobz, uplo, m, A, lda, B, lda, d_W, &lwork_double));
+        CHECK_CUDA(cudaMalloc((void**)&d_work, sizeof(double) * lwork_double));
     }
     CHECK_CUSOLVER(cusolverDnDsygvd(
-        cusolverH, itype, jobz, uplo, m, d_A, lda, d_B, lda, d_W, d_work, lwork, devInfo));
+        cusolverH, itype, jobz, uplo, m, A, lda, B, lda, d_W, d_work, lwork_double, devInfo));
     CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaMemcpy(W, d_W, sizeof(double) * m, cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
@@ -92,23 +94,31 @@ void Diag_Cusolver_gvd::solve_double(int N, int M, double* A, double* B, double*
 }
 
 void Diag_Cusolver_gvd::solve_complex(
-    int N, int M, std::complex<double>* A, std::complex<double>* B, double* W, cudaMemcpyKind input_copy)
+    int N, int M, std::complex<double>* A, std::complex<double>* B, double* W)
 {
     assert(N == M);
-    if (M != m) {
-        this->finalize();
-        this->init_complex(M);
+    this->prepare_dimension(M);
+    const size_t bytes = sizeof(cuDoubleComplex) * lda * m;
+    if (d_A2 == nullptr)
+    {
+        CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&d_A2), bytes));
+        CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&d_B2), bytes));
     }
-    CHECK_CUDA(cudaMemcpy(d_A2, A, sizeof(cuDoubleComplex) * lda * m, input_copy));
-    CHECK_CUDA(cudaMemcpy(d_B2, B, sizeof(cuDoubleComplex) * lda * m, input_copy));
+    CHECK_CUDA(cudaMemcpy(d_A2, A, bytes, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_B2, B, bytes, cudaMemcpyHostToDevice));
+    this->solve_complex_inplace(d_A2, d_B2, W);
+}
+
+void Diag_Cusolver_gvd::solve_complex_inplace(cuDoubleComplex* A, cuDoubleComplex* B, double* W)
+{
     if (d_work2 == nullptr)
     {
         CHECK_CUSOLVER(cusolverDnZhegvd_bufferSize(
-            cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, &lwork));
-        CHECK_CUDA(cudaMalloc((void**)&d_work2, sizeof(cuDoubleComplex) * lwork));
+            cusolverH, itype, jobz, uplo, m, A, lda, B, lda, d_W, &lwork_complex));
+        CHECK_CUDA(cudaMalloc((void**)&d_work2, sizeof(cuDoubleComplex) * lwork_complex));
     }
     CHECK_CUSOLVER(cusolverDnZhegvd(
-        cusolverH, itype, jobz, uplo, m, d_A2, lda, d_B2, lda, d_W, d_work2, lwork, devInfo));
+        cusolverH, itype, jobz, uplo, m, A, lda, B, lda, d_W, d_work2, lwork_complex, devInfo));
     CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaMemcpy(W, d_W, sizeof(double) * m, cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost));
@@ -117,7 +127,7 @@ void Diag_Cusolver_gvd::solve_complex(
 
 void Diag_Cusolver_gvd::Dngvd_double(int N, int M, double* A, double* B, double* W, double* V)
 {
-    this->solve_double(N, M, A, B, W, cudaMemcpyHostToDevice);
+    this->solve_double(N, M, A, B, W);
     CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * m, cudaMemcpyDeviceToHost));
 }
 
@@ -125,14 +135,14 @@ void Diag_Cusolver_gvd::Dngvd_double_device(
     int N, int M, double* A, double* B, double* W, double* V, int nvec)
 {
     assert(nvec <= N);
-    this->solve_double(N, M, A, B, W, cudaMemcpyHostToDevice);
+    this->solve_double(N, M, A, B, W);
     CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * nvec, cudaMemcpyDeviceToDevice));
 }
 
 void Diag_Cusolver_gvd::Dngvd_complex(
     int N, int M, std::complex<double>* A, std::complex<double>* B, double* W, std::complex<double>* V)
 {
-    this->solve_complex(N, M, A, B, W, cudaMemcpyHostToDevice);
+    this->solve_complex(N, M, A, B, W);
     CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * m, cudaMemcpyDeviceToHost));
 }
 
@@ -146,21 +156,25 @@ void Diag_Cusolver_gvd::Dngvd_complex_device(
     int nvec)
 {
     assert(nvec <= N);
-    this->solve_complex(N, M, A, B, W, cudaMemcpyHostToDevice);
+    this->solve_complex(N, M, A, B, W);
     CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * nvec, cudaMemcpyDeviceToDevice));
 }
 
-void Diag_Cusolver_gvd::Dngvd_device_input(int N, double* A, double* B, double* W, double* V, int nvec)
+void Diag_Cusolver_gvd::Dngvd_device_inplace(int N, double* A, double* B, double* W, double* V, int nvec)
 {
     assert(nvec <= N);
-    this->solve_double(N, N, A, B, W, cudaMemcpyDeviceToDevice);
-    CHECK_CUDA(cudaMemcpy(V, d_A, sizeof(double) * lda * nvec, cudaMemcpyDeviceToDevice));
+    this->prepare_dimension(N);
+    this->solve_double_inplace(A, B, W);
+    CHECK_CUDA(cudaMemcpy(V, A, sizeof(double) * lda * nvec, cudaMemcpyDeviceToDevice));
 }
 
-void Diag_Cusolver_gvd::Dngvd_device_input(int N, std::complex<double>* A, std::complex<double>* B,
-                                        double* W, std::complex<double>* V, int nvec)
+void Diag_Cusolver_gvd::Dngvd_device_inplace(int N, std::complex<double>* A, std::complex<double>* B,
+                                           double* W, std::complex<double>* V, int nvec)
 {
     assert(nvec <= N);
-    this->solve_complex(N, N, A, B, W, cudaMemcpyDeviceToDevice);
-    CHECK_CUDA(cudaMemcpy(V, d_A2, sizeof(std::complex<double>) * lda * nvec, cudaMemcpyDeviceToDevice));
+    this->prepare_dimension(N);
+    auto* matrix_a = reinterpret_cast<cuDoubleComplex*>(A);
+    auto* matrix_b = reinterpret_cast<cuDoubleComplex*>(B);
+    this->solve_complex_inplace(matrix_a, matrix_b, W);
+    CHECK_CUDA(cudaMemcpy(V, A, sizeof(std::complex<double>) * lda * nvec, cudaMemcpyDeviceToDevice));
 }

@@ -74,12 +74,12 @@ void DiagoCusolver<T>::diag_device(
 }
 
 template <typename T>
-void DiagoCusolver<T>::diag_device_input(T* h, T* s,
-                                        psi::Psi<T, base_device::DEVICE_GPU>& psi, Real* eigenvalue_in)
+void DiagoCusolver<T>::diag_device_inplace(T* h, T* s,
+                                          psi::Psi<T, base_device::DEVICE_GPU>& psi, Real* eigenvalue_in)
 {
     ModuleBase::timer::start("DiagoCusolver", "cusolver");
     std::vector<double> eigen(this->nlocal, 0.0);
-    this->dc.Dngvd_device_input(this->nlocal, h, s, eigen.data(), psi.get_pointer(), psi.get_nbands());
+    this->dc.Dngvd_device_inplace(this->nlocal, h, s, eigen.data(), psi.get_pointer(), psi.get_nbands());
     std::copy(eigen.begin(), eigen.begin() + this->nbands, eigenvalue_in);
     ModuleBase::timer::end("DiagoCusolver", "cusolver");
 }

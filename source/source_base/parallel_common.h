@@ -27,6 +27,7 @@ void bcast_bool(bool& object);
 
 #ifdef __MPI
 int communicator_size(MPI_Comm comm);
+int communicator_rank(MPI_Comm comm);
 void alltoall_int(const int* sendbuf, int* recvbuf, MPI_Comm comm);
 void alltoallv_double(const double* sendbuf, const int* sendcounts, const int* senddispls,
                      double* recvbuf, const int* recvcounts, const int* recvdispls, MPI_Comm comm);

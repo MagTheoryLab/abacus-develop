@@ -21,7 +21,9 @@ const HContainer<double>& GintInfo::gather_spinor_density(const HContainer<doubl
     Parallel_Reduce::reduce_all(rebuild);
     if (rebuild)
     {
-        density_gather_.reset(new hamilt::DensityGather(source, get_hr<double>(2)));
+        constexpr int buffer_values = 64 * 1024 * 1024 / sizeof(double);
+        const auto& serial_layout = get_hr<double>(2);
+        density_gather_.reset(new hamilt::DensityGather(source, serial_layout, buffer_values));
     }
     return density_gather_->gather(source);
 }

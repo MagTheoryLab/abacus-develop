@@ -46,6 +46,10 @@ TEST(FoldingHrGpu, DistributedComplexOracleAndValueUpdate)
         for (int ip = 0; ip < hr.size_atom_pairs(); ++ip)
         {
             auto& pair = hr.get_atom_pair(ip);
+            if (pass == 1)
+            {
+                pair.allocate(nullptr, true);
+            }
             for (int ir = 0; ir < pair.get_R_size(); ++ir)
                 for (int i = 0; i < pair.get_row_size() * pair.get_col_size(); ++i)
                     pair.get_pointer(ir)[i] = {0.17 * (pass + 1) + 0.13 * ir - 0.02 * ip + 0.003 * i,

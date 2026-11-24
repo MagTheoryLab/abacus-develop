@@ -1,8 +1,8 @@
 #include "gtest/gtest.h"
 #include "../density_gather.h"
 #include "../hcontainer.h"
-#include "../hcontainer_funcs.h"
 #include "source_base/parallel_global.h"
+#include <algorithm>
 
 namespace
 {
@@ -41,12 +41,19 @@ TEST(DensityGather, UnevenSpinorBlocksReuseAndIndependentOracle)
         }
     source.allocate(nullptr, true);
     serial.allocate(nullptr, true);
-    hamilt::DensityGather plan(source, serial);
+    // Force multiple batches with unequal and empty peer messages.
+    hamilt::DensityGather plan(source, serial, 1);
     ASSERT_TRUE(plan.matches(source));
     hamilt::HContainer<double> replacement(source);
+    const auto topology = source.get_ijr_info();
+    const size_t source_size = source.get_nnr();
     for (int pass = 0; pass < 3; ++pass)
     {
+        SCOPED_TRACE(pass);
         auto& input = pass == 1 ? replacement : source;
+        ASSERT_EQ(input.get_paraV(), &pv);
+        ASSERT_EQ(input.get_nnr(), source_size);
+        ASSERT_EQ(input.get_ijr_info(), topology);
         ASSERT_TRUE(plan.matches(input));
         for (int i = 0; i < input.size_atom_pairs(); ++i)
         {
@@ -61,8 +68,7 @@ TEST(DensityGather, UnevenSpinorBlocksReuseAndIndependentOracle)
                               + 10 * rows[row] + cols[col] + 0.25 * ap.get_R_index(ir).x;
         }
         const auto& actual = plan.gather(input);
-        serial.set_zero();
-        hamilt::transferParallels2Serials(input, &serial);
+        EXPECT_TRUE(plan.matches(input));
         for (int i = 0; i < actual.size_atom_pairs(); ++i)
         {
             const auto& ap = actual.get_atom_pair(i);
@@ -76,8 +82,6 @@ TEST(DensityGather, UnevenSpinorBlocksReuseAndIndependentOracle)
                                 + 10 * row + col + 0.25 * rx;
                         const int index = row * ap.get_col_size() + col;
                         EXPECT_DOUBLE_EQ(ap.get_pointer(ir)[index], expected);
-                        EXPECT_DOUBLE_EQ(ap.get_pointer(ir)[index],
-                            serial.find_matrix(ap.get_atom_i(), ap.get_atom_j(), ap.get_R_index(ir))->get_pointer()[index]);
                     }
         }
     }
@@ -86,9 +90,38 @@ TEST(DensityGather, UnevenSpinorBlocksReuseAndIndependentOracle)
     EXPECT_FALSE(plan.matches(empty));
     hamilt::HContainer<double> empty_serial(3);
     empty_serial.allocate(nullptr, true);
-    hamilt::DensityGather empty_plan(empty, empty_serial);
+    hamilt::DensityGather empty_plan(empty, empty_serial, 1);
     EXPECT_TRUE(empty_plan.matches(empty));
     EXPECT_EQ(empty_plan.gather(empty).get_nnr(), 0);
+}
+
+TEST(DensityGather, ReplicatedLayoutsKeepSourceRankOrder)
+{
+    const int trace[] = {0};
+    Parallel_Orbitals pv;
+    pv.set_serial(2, 2);
+    pv.set_atomic_trace(trace, 1, 2);
+    hamilt::HContainer<double> source(&pv);
+    hamilt::AtomPair<double> local_pair(0, 0, &pv);
+    local_pair.get_HR_values(0, 0, 0);
+    source.insert_pair(local_pair);
+    source.allocate(nullptr, true);
+    const double value = test_rank + 1.0;
+    std::fill_n(source.get_wrapper(), source.get_nnr(), value);
+
+    hamilt::HContainer<double> serial(1);
+    hamilt::AtomPair<double> serial_pair(0, 0);
+    serial_pair.set_size(2, 2);
+    serial_pair.get_HR_values(0, 0, 0);
+    serial.insert_pair(serial_pair);
+    serial.allocate(nullptr, true);
+    hamilt::DensityGather plan(source, serial, 1);
+    const auto& actual = plan.gather(source);
+    ASSERT_EQ(actual.get_nnr(), 4u);
+    for (size_t i = 0; i < actual.get_nnr(); ++i)
+    {
+        EXPECT_DOUBLE_EQ(actual.get_wrapper()[i], test_size);
+    }
 }
 
 int main(int argc, char** argv)

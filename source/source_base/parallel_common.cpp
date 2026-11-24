@@ -116,6 +116,13 @@ int communicator_size(MPI_Comm comm)
     return size;
 }
 
+int communicator_rank(MPI_Comm comm)
+{
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    return rank;
+}
+
 void alltoall_int(const int* sendbuf, int* recvbuf, MPI_Comm comm)
 {
     MPI_Alltoall(sendbuf, 1, MPI_INT, recvbuf, 1, MPI_INT, comm);

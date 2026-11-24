@@ -5,6 +5,7 @@
 #include "source_base/timer.h"
 #include <algorithm>
 #include <climits>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 
@@ -22,16 +23,13 @@ template <typename T>
 struct Buffer
 {
     T* device = nullptr;
-    T* host = nullptr;
-    Buffer(size_t n, bool pinned)
+    explicit Buffer(size_t n)
     {
         const size_t bytes = std::max<size_t>(1, n) * sizeof(T);
         CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&device), bytes));
-        if (pinned) CHECK_CUDA(cudaMallocHost(reinterpret_cast<void**>(&host), bytes));
     }
     ~Buffer()
     {
-        if (host) CHECK_CUDA(cudaFreeHost(host));
         CHECK_CUDA(cudaFree(device));
     }
     Buffer(const Buffer&) = delete;
@@ -134,11 +132,13 @@ FoldingHrGpu::FoldingHrGpu(const HContainer<std::complex<double>>& hr,
         for (size_t i = 0; i < size_t(count); i += 256) tiles.push_back(make_int2(ip, index_size(i)));
     }
     p.ntiles = index_size(tiles.size());
-    p.device_pairs.reset(new Buffer<Pair>(p.pairs.size(), false));
-    p.tiles.reset(new Buffer<int2>(tiles.size(), false));
-    p.values.reset(new Buffer<double2>(p.nvalues, true));
-    p.phases.reset(new Buffer<double2>(p.lattice.size() * p.nk, false));
-    p.output.reset(new Buffer<double2>(size_t(p.rows) * p.cols, false));
+    p.device_pairs.reset(new Buffer<Pair>(p.pairs.size()));
+    p.tiles.reset(new Buffer<int2>(tiles.size()));
+    p.values.reset(new Buffer<double2>(p.nvalues));
+    const size_t phase_count = p.lattice.size() * p.nk;
+    p.phases.reset(new Buffer<double2>(phase_count));
+    const size_t output_size = size_t(p.rows) * p.cols;
+    p.output.reset(new Buffer<double2>(output_size));
     if (!p.pairs.empty())
         CHECK_CUDA(cudaMemcpy(p.device_pairs->device, p.pairs.data(), p.pairs.size() * sizeof(Pair), cudaMemcpyHostToDevice));
     if (!tiles.empty())
@@ -171,6 +171,9 @@ void FoldingHrGpu::upload(const HContainer<std::complex<double>>& hr)
     if (hr.size_atom_pairs() != p.pairs.size()
         || hr.get_paraV()->get_row_size() != p.rows || hr.get_paraV()->get_col_size() != p.cols)
         throw std::invalid_argument("GPU folding layout changed");
+    const auto* wrapper = hr.get_wrapper();
+    const auto wrapper_address = reinterpret_cast<std::uintptr_t>(wrapper);
+    bool contiguous = wrapper != nullptr;
     for (int ip = 0; ip < hr.size_atom_pairs(); ++ip)
     {
         const auto& ap = hr.get_atom_pair(ip);
@@ -185,12 +188,43 @@ void FoldingHrGpu::upload(const HContainer<std::complex<double>>& hr)
             const auto expected = p.lattice[pair.phases + ir];
             if (r.x != expected.x || r.y != expected.y || r.z != expected.z)
                 throw std::invalid_argument("GPU folding lattice order changed");
-            if (count) std::memcpy(p.values->host + pair.values + ir * count, ap.get_pointer(ir),
-                                   count * sizeof(double2));
+            if (count)
+            {
+                const size_t offset = pair.values + ir * count;
+                const auto block_address = reinterpret_cast<std::uintptr_t>(ap.get_pointer(ir));
+                contiguous = contiguous && block_address == wrapper_address + offset * sizeof(double2);
+            }
         }
     }
+    std::vector<double2> staging;
+    const void* source = wrapper;
+    if (p.nvalues && !contiguous)
+    {
+        staging.resize(p.nvalues);
+        for (int ip = 0; ip < hr.size_atom_pairs(); ++ip)
+        {
+            const auto& ap = hr.get_atom_pair(ip);
+            const auto& pair = p.pairs[ip];
+            const size_t count = size_t(pair.rows) * pair.cols;
+            if (count == 0)
+            {
+                continue;
+            }
+            for (int ir = 0; ir < pair.nr; ++ir)
+            {
+                auto* dest = staging.data() + pair.values + ir * count;
+                const auto* block = ap.get_pointer(ir);
+                const size_t bytes = count * sizeof(double2);
+                std::memcpy(dest, block, bytes);
+            }
+        }
+        source = staging.data();
+    }
     if (p.nvalues)
-        CHECK_CUDA(cudaMemcpy(p.values->device, p.values->host, p.nvalues * sizeof(double2), cudaMemcpyHostToDevice));
+    {
+        const size_t bytes = p.nvalues * sizeof(double2);
+        CHECK_CUDA(cudaMemcpy(p.values->device, source, bytes, cudaMemcpyHostToDevice));
+    }
     ModuleBase::timer::end("FoldingHrGpu", "upload");
 }
 

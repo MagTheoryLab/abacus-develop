@@ -12,7 +12,8 @@ template <typename T> class HContainer;
 class DensityGather
 {
   public:
-    DensityGather(const HContainer<double>& source, const HContainer<double>& serial_layout);
+    // Reuse this many doubles per send or receive buffer, or one peer's full message if larger.
+    DensityGather(const HContainer<double>& source, const HContainer<double>& serial_layout, int buffer_values);
     ~DensityGather();
     bool matches(const HContainer<double>& source) const;
     const HContainer<double>& gather(const HContainer<double>& source);

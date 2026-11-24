@@ -2,10 +2,12 @@
 #include "hcontainer.h"
 #include "transfer.h"
 #include "source_base/parallel_common.h"
+#include "source_base/parallel_reduce.h"
 #include "source_base/timer.h"
 #include <algorithm>
 #include <climits>
 #include <stdexcept>
+#include <utility>
 
 namespace hamilt
 {
@@ -42,11 +44,29 @@ struct DensityGather::Impl
 #ifdef __MPI
     std::unique_ptr<HTransPara<double>> parallel_transfer;
     std::unique_ptr<HTransSerial<double>> serial_transfer;
-#endif
+    int world_rank = 0;
+    int peers_per_batch = 1;
+    std::vector<int> send_totals;
+    std::vector<int> recv_totals;
     std::vector<int> sendcounts;
     std::vector<int> recvcounts;
     std::vector<int> senddispls;
     std::vector<int> recvdispls;
+
+    void select_batch(int begin, int end)
+    {
+        std::fill(sendcounts.begin(), sendcounts.end(), 0);
+        std::fill(recvcounts.begin(), recvcounts.end(), 0);
+        // A rank sending forward by a given offset receives the same offset backward.
+        for (int offset = begin; offset < end; ++offset)
+        {
+            const int dest = (world_rank + offset) % size;
+            const int src = (world_rank + size - offset) % size;
+            sendcounts[dest] = send_totals[dest];
+            recvcounts[src] = recv_totals[src];
+        }
+    }
+#endif
     std::vector<double> send;
     std::vector<double> recv;
 
@@ -64,7 +84,9 @@ struct DensityGather::Impl
     }
 };
 
-DensityGather::DensityGather(const HContainer<double>& source, const HContainer<double>& serial_layout)
+DensityGather::DensityGather(const HContainer<double>& source,
+                             const HContainer<double>& serial_layout,
+                             int buffer_values)
     : impl_(new Impl(source, serial_layout))
 {
     ModuleBase::timer::start("Gint", "dm_gather_layout");
@@ -103,12 +125,37 @@ DensityGather::DensityGather(const HContainer<double>& source, const HContainer<
             else p.serial_transfer->receive_orb_indexes(rank, indices, recvcounts[rank]);
         }
     }
+    p.parallel_transfer->get_value_size(sendcounts.data());
+    p.serial_transfer->get_value_size(recvcounts.data());
+    int max_peer = *std::max_element(sendcounts.begin(), sendcounts.end());
+    Parallel_Reduce::reduce_max(max_peer);
+    const int peer_values = std::max(1, max_peer);
+    p.world_rank = Parallel_Common::communicator_rank(MPI_COMM_WORLD);
+    const int layout_size = p.orbitals->get_dim0() * p.orbitals->get_dim1();
+    int replicated_layout = layout_size != p.size;
+    Parallel_Reduce::reduce_max(replicated_layout);
+    // A replicated layout can overwrite the same slots from different sources.
+    // Keep its original source-rank order in one exchange.
+    p.peers_per_batch = replicated_layout ? p.size : std::max(1, buffer_values / peer_values);
+    p.send_totals = std::move(sendcounts);
+    p.recv_totals = std::move(recvcounts);
     p.sendcounts.resize(p.size);
     p.recvcounts.resize(p.size);
-    p.parallel_transfer->get_value_size(p.sendcounts.data());
-    p.serial_transfer->get_value_size(p.recvcounts.data());
-    p.send.resize(std::max(1, offsets(p.sendcounts, p.senddispls)));
-    p.recv.resize(std::max(1, offsets(p.recvcounts, p.recvdispls)));
+    int max_send = 1;
+    int max_recv = 1;
+    for (int begin = 0; begin < p.size;)
+    {
+        const int batch_size = std::min(p.size - begin, p.peers_per_batch);
+        const int end = begin + batch_size;
+        p.select_batch(begin, end);
+        const int send_size = offsets(p.sendcounts, p.senddispls);
+        const int recv_size = offsets(p.recvcounts, p.recvdispls);
+        max_send = std::max(max_send, send_size);
+        max_recv = std::max(max_recv, recv_size);
+        begin = end;
+    }
+    p.send.resize(max_send);
+    p.recv.resize(max_recv);
 #endif
     ModuleBase::timer::end("Gint", "dm_gather_layout");
 }
@@ -130,18 +177,34 @@ const HContainer<double>& DensityGather::gather(const HContainer<double>& source
     if (!matches(source)) throw std::invalid_argument("density gather source layout changed");
     p.serial.set_zero();
 #ifdef __MPI
-    for (int rank = 0; rank < p.size; ++rank)
+    for (int begin = 0; begin < p.size;)
     {
-        if (p.sendcounts[rank])
+        const int batch_size = std::min(p.size - begin, p.peers_per_batch);
+        const int end = begin + batch_size;
+        p.select_batch(begin, end);
+        offsets(p.sendcounts, p.senddispls);
+        offsets(p.recvcounts, p.recvdispls);
+        for (int rank = 0; rank < p.size; ++rank)
         {
-            double* values = p.send.data() + p.senddispls[rank];
-            p.parallel_transfer->pack_data(rank, source, values);
+            if (p.sendcounts[rank])
+            {
+                double* values = p.send.data() + p.senddispls[rank];
+                p.parallel_transfer->pack_data(rank, source, values);
+            }
         }
+        Parallel_Common::alltoallv_double(p.send.data(), p.sendcounts.data(), p.senddispls.data(),
+                                         p.recv.data(), p.recvcounts.data(), p.recvdispls.data(),
+                                         MPI_COMM_WORLD);
+        for (int rank = 0; rank < p.size; ++rank)
+        {
+            if (p.recvcounts[rank])
+            {
+                const double* values = p.recv.data() + p.recvdispls[rank];
+                p.serial_transfer->receive_data(rank, values);
+            }
+        }
+        begin = end;
     }
-    Parallel_Common::alltoallv_double(p.send.data(), p.sendcounts.data(), p.senddispls.data(),
-                                   p.recv.data(), p.recvcounts.data(), p.recvdispls.data(), MPI_COMM_WORLD);
-    for (int rank = 0; rank < p.size; ++rank)
-        if (p.recvcounts[rank]) p.serial_transfer->receive_data(rank, p.recv.data() + p.recvdispls[rank]);
 #else
     p.serial.add(source);
 #endif

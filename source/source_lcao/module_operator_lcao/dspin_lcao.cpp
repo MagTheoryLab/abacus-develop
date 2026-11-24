@@ -37,21 +37,8 @@ hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::DeltaSpin(HS_Matrix_K<TK>* hsk_
     this->B_I_nproj.resize(this->ucell->nat, 0);
 }
 
-// destructor
 template <typename TK, typename TR>
-hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::~DeltaSpin()
-{
-    for (auto& hr : this->pre_hr)
-    {
-        if (hr != nullptr)
-        {
-            delete hr;
-            hr = nullptr;
-        }
-    }
-    this->pre_hr.clear();
-    this->pre_hr.shrink_to_fit();
-}
+hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::~DeltaSpin() = default;
 
 // simple functions to calculate the coefficients from lambda
 inline void cal_coeff_lambda(const std::vector<double>& current_lambda, std::vector<double>& coefficients)
@@ -125,35 +112,38 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
         // magnetic moment = \sum_{\mu\nu,R} dmR * pre_hr
         for(int iap=0;iap<this->pre_hr[iat]->size_atom_pairs();iap++)
         {
-            hamilt::AtomPair<TR>& tmp = this->pre_hr[iat]->get_atom_pair(iap);
-            int iat1 = tmp.get_atom_i();
-            int iat2 = tmp.get_atom_j();
-            int row_size = tmp.get_row_size();
-            int col_size = tmp.get_col_size();
-            if(this->nspin==4)
+            const auto& pair = this->pre_hr[iat]->get_atom_pair(iap);
+            const int iat1 = pair.get_atom_i();
+            const int iat2 = pair.get_atom_j();
+            const int rows = pair.get_row_size();
+            const int cols = pair.get_col_size();
+            for (int ir = 0; ir < pair.get_R_size(); ++ir)
             {
-                this->pre_coeff_array(coefficients, row_size, col_size);
-            }
-            for(int ir = 0;ir < tmp.get_R_size(); ++ir )
-            {
-                const ModuleBase::Vector3<int> r_index = tmp.get_R_index(ir);
-                const TR* pre_hr_data = tmp.get_pointer(ir);
-                TR* dhr_data = this->hR->find_matrix(iat1, iat2, r_index[0], r_index[1], r_index[2])->get_pointer();
-                // TR== double: axpy for dhr_data += current_lambda * pre_hr_data
-                // TR!= double: call cal_lambda_hr_IJR
-                if (this->nspin==2)
+                const auto& translation = pair.get_R_index(ir);
+                const double* projector = pair.get_pointer(ir);
+                auto* block = this->hR->find_matrix(iat1, iat2, translation.x, translation.y, translation.z);
+                TR* dhr = block->get_pointer();
+                if (this->nspin == 2)
                 {
-                    //BlasConnector::axpy(row_size*col_size, coefficients[this->current_spin], pre_hr_data, dhr_data);
-                    for(int i=0;i<tmp.get_size();i++)
+                    for (int i = 0; i < pair.get_size(); ++i)
                     {
-                        dhr_data[i] += pre_hr_data[i] * coefficients[this->current_spin];
+                        dhr[i] += projector[i] * coefficients[this->current_spin];
                     }
                 }
                 else
                 {
-                    for(int i=0;i<tmp.get_size();i++)
+                    const int stride = 2 * cols;
+                    for (int row = 0; row < rows; ++row)
                     {
-                        dhr_data[i] += pre_hr_data[i] * this->tmp_coeff_array[i];
+                        for (int col = 0; col < cols; ++col)
+                        {
+                            const double overlap = projector[row * cols + col];
+                            const int index = 2 * row * stride + 2 * col;
+                            dhr[index] += overlap * coefficients[0];
+                            dhr[index + 1] += overlap * coefficients[1];
+                            dhr[index + stride] += overlap * coefficients[2];
+                            dhr[index + stride + 1] += overlap * coefficients[3];
+                        }
                     }
                 }
             }
@@ -177,24 +167,6 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
     }
     this->sc_hr_done = true;
     return;
-}
-
-// cal_lambda_hr_IJR
-template <typename TK, typename TR>
-void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::pre_coeff_array(
-    const std::vector<TR>& coeff, const int row_size, const int col_size)
-{
-    this->tmp_coeff_array.resize(row_size*col_size);
-    for(int irow=0;irow<row_size;irow+=2)
-    {
-        for(int icol=0;icol<col_size;icol+=2)
-        {
-            this->tmp_coeff_array[irow*col_size+icol] = coeff[0];
-            this->tmp_coeff_array[irow*col_size+icol+1] = coeff[1];
-            this->tmp_coeff_array[(irow+1)*col_size+icol] = coeff[2];
-            this->tmp_coeff_array[(irow+1)*col_size+icol+1] = coeff[3];
-        }
-    }
 }
 
 // cal_constraint_atom_list()
@@ -230,19 +202,24 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
     }
     this->paraV = this->hR->get_paraV();
     ModuleBase::timer::start("DeltaSpin", "cal_pre_HR");
-    // Reset the caches from a possible previous initialization:
-    // pre_hr holds raw HContainer pointers, so clear() alone would leak them,
-    // and stale B_I_data would survive for atoms that are no longer constrained.
-    for (auto& hr : this->pre_hr)
-    {
-        delete hr;
-    }
+    const int nat = this->ucell->nat;
     this->pre_hr.clear();
-    this->pre_hr.resize(this->ucell->nat, nullptr);
+    this->pre_hr.resize(nat);
     this->B_I_data.clear();
-    this->B_I_data.resize(this->ucell->nat);
+    this->B_I_data.resize(nat);
 
+    // Store one real overlap product per spatial orbital pair.
     const int npol = this->ucell->get_npol();
+    std::vector<int> spatial_row_begin(nat + 1, 0);
+    std::vector<int> spatial_col_begin(nat + 1, 0);
+    for (int iat = 0; iat < nat; ++iat)
+    {
+        const int rows = this->paraV->get_nrow_atom(iat);
+        const int cols = this->paraV->get_ncol_atom(iat);
+        assert(rows % npol == 0 && cols % npol == 0);
+        spatial_row_begin[iat + 1] = spatial_row_begin[iat] + rows / npol;
+        spatial_col_begin[iat + 1] = spatial_col_begin[iat] + cols / npol;
+    }
     size_t memory_cost = 0;
     for(int iat=0;iat<this->ucell->nat;iat++)
     {
@@ -279,7 +256,7 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
         filter_adjs(is_adj, adjs);
 
         // second step: prepare the <IJR> pairs for each iat-atom
-        this->pre_hr[iat] = new hamilt::HContainer<TR>(this->paraV);
+        this->pre_hr[iat].reset(new hamilt::HContainer<double>(nat));
         for (int ad1 = 0; ad1 < adjs.adj_num + 1; ++ad1)
         {
             const int T1 = adjs.ntype[ad1];
@@ -298,12 +275,14 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
                 {
                     continue;
                 }
-                hamilt::AtomPair<TR> tmp(iat1,
-                                         iat2,
-                                         r_vector[0],
-                                         r_vector[1],
-                                         r_vector[2],
-                                         paraV);
+                hamilt::AtomPair<double> tmp(iat1,
+                                             iat2,
+                                             r_vector[0],
+                                             r_vector[1],
+                                             r_vector[2],
+                                             spatial_row_begin.data(),
+                                             spatial_col_begin.data(),
+                                             nat);
                 this->pre_hr[iat]->insert_pair(tmp);
             }
         }
@@ -395,7 +374,7 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
                 ModuleBase::Vector3<int> R_vector(R_index2[0] - R_index1[0],
                                                   R_index2[1] - R_index1[1],
                                                   R_index2[2] - R_index1[2]);
-                hamilt::BaseMatrix<TR>* tmp = this->pre_hr[iat]->find_matrix(iat1, iat2, R_vector[0], R_vector[1], R_vector[2]);
+                auto* tmp = this->pre_hr[iat]->find_matrix(iat1, iat2, R_vector[0], R_vector[1], R_vector[2]);
                 // if not found , skip this pair of atoms
                 if (tmp != nullptr)
                 {
@@ -415,49 +394,26 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_HR_IJR(const int& iat1
                     const int& iat2,
                     const std::unordered_map<int, std::vector<double>>& nlm1_all,
                     const std::unordered_map<int, std::vector<double>>& nlm2_all,
-                    TR* data_pointer)
+                    double* data_pointer)
 {
-    // npol is the number of polarizations,
-    // 1 for non-magnetic (one Hamiltonian matrix only has spin-up or spin-down),
-    // 2 for magnetic (one Hamiltonian matrix has both spin-up and spin-down)
     const int npol = this->ucell->get_npol();
-    // ---------------------------------------------
-    // calculate the Nonlocal matrix for each pair of orbitals
-    // ---------------------------------------------
-    auto row_indexes = this->paraV->get_indexes_row(iat1);
-    auto col_indexes = this->paraV->get_indexes_col(iat2);
-    // step_trace = 0 for NSPIN=1,2; ={0, 1, local_col, local_col+1} for NSPIN=4
-    std::vector<int> step_trace(npol*npol, 0);
-    for (int is = 0; is < npol; is++)
+    const auto row_indexes = this->paraV->get_indexes_row(iat1);
+    const auto col_indexes = this->paraV->get_indexes_col(iat2);
+    for (int row = 0; row < row_indexes.size(); row += npol)
     {
-        for (int is2 = 0; is2 < npol; is2++)
+        const auto& left = nlm1_all.at(row_indexes[row]);
+        for (int col = 0; col < col_indexes.size(); col += npol)
         {
-            step_trace[is * npol + is2] = this->paraV->get_ncol_atom(iat2) * is + is2;
-        }
-    }
-    // calculate the local matrix
-    const TR* tmp_d = nullptr;
-    for (int iw1l = 0; iw1l < row_indexes.size(); iw1l += npol)
-    {
-        const std::vector<double>& nlm1 = nlm1_all.find(row_indexes[iw1l])->second;
-        for (int iw2l = 0; iw2l < col_indexes.size(); iw2l += npol)
-        {
-            const std::vector<double>& nlm2 = nlm2_all.find(col_indexes[iw2l])->second;
-#ifdef __DEBUG
-            assert(nlm1.size() == nlm2.size());
-#endif
-            TR nlm_tmp = TR(0);
-            for (int m1 = 0; m1 < nlm1.size(); m1++)
+            const auto& right = nlm2_all.at(col_indexes[col]);
+            assert(left.size() == right.size());
+            double overlap = 0.0;
+            for (int projector = 0; projector < left.size(); ++projector)
             {
-                nlm_tmp += nlm1[m1] * nlm2[m1];
+                overlap += left[projector] * right[projector];
             }
-            for (int is = 0; is < npol*npol; ++is)
-            {
-                data_pointer[step_trace[is]] += nlm_tmp;
-            }
-            data_pointer += npol;
+            *data_pointer += overlap;
+            ++data_pointer;
         }
-        data_pointer += (npol - 1) * col_indexes.size();
     }
 }
 
@@ -488,7 +444,7 @@ std::vector<double> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_moment(
         // magnetic moment = \sum_{\mu\nu,R} dmR * pre_hr
         for(int iap=0;iap<this->pre_hr[iat]->size_atom_pairs();iap++)
         {
-            hamilt::AtomPair<TR>& tmp = this->pre_hr[iat]->get_atom_pair(iap);
+            const auto& tmp = this->pre_hr[iat]->get_atom_pair(iap);
             int iat1 = tmp.get_atom_i();
             int iat2 = tmp.get_atom_j();
             int row_size = tmp.get_row_size();
@@ -497,7 +453,7 @@ std::vector<double> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_moment(
             {
                 const ModuleBase::Vector3<int> r_index = tmp.get_R_index(ir);
                 double* dmr_data = dmR->find_matrix(iat1, iat2, r_index[0], r_index[1], r_index[2])->get_pointer();
-                const TR* hr_data = tmp.get_pointer(ir);
+                const double* hr_data = tmp.get_pointer(ir);
                 this->cal_moment_IJR(dmr_data, hr_data, row_size, col_size, &moment[iat*mag_fold]);
             }
         }
@@ -513,14 +469,14 @@ std::vector<double> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_moment(
 template <typename TK, typename TR>
 void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_moment_IJR(
     const double* dmR, 
-    const TR* hr, 
+    const double* hr,
     const int row_size,
     const int col_size, 
     double* moment
 )
 {
     // collinear spin case
-    TR tmp_moment = TR(0);
+    double tmp_moment = 0.0;
     for(int i=0;i<row_size*col_size;i++)
     {
         tmp_moment += dmR[i] * hr[i];
@@ -531,29 +487,28 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_moment_IJR(
 template<>
 void hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>>::cal_moment_IJR(
     const double* dmR, 
-    const std::complex<double>* hr, 
+    const double* hr,
     const int row_size,
     const int col_size, 
     double* moment
 )
 {
-    const int step_trace[4] = {0, 1, col_size, col_size+1};
-    int index = 0;
-    std::vector<std::complex<double>> tmp_moment(3, std::complex<double>(0.0, 0.0));
-    for(int irow=0;irow<row_size;irow+=2)
+    const int stride = 2 * col_size;
+    double tmp_moment[3] = {};
+    for (int row = 0; row < row_size; ++row)
     {
-        for(int icol=0;icol<col_size;icol+=2)
+        for (int col = 0; col < col_size; ++col)
         {
-            tmp_moment[0] += dmR[index+step_trace[1]] * hr[index];
-            tmp_moment[1] += dmR[index+step_trace[2]] * hr[index];
-            tmp_moment[2] += dmR[index+step_trace[3]] * hr[index];
-            index += 2;
+            const int index = 2 * row * stride + 2 * col;
+            const double overlap = hr[row * col_size + col];
+            tmp_moment[0] += dmR[index + 1] * overlap;
+            tmp_moment[1] += dmR[index + stride] * overlap;
+            tmp_moment[2] += dmR[index + stride + 1] * overlap;
         }
-        index += col_size;
     }
-    moment[0] += tmp_moment[0].real();
-    moment[1] += tmp_moment[1].real();
-    moment[2] += tmp_moment[2].real();
+    moment[0] += tmp_moment[0];
+    moment[1] += tmp_moment[1];
+    moment[2] += tmp_moment[2];
 }
 
 // cal_PI_sub: compute P_I_sub(k) = D_I(k)^dag D_I(k) for all constrained atoms

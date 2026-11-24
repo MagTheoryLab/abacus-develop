@@ -7,6 +7,7 @@
 #include "source_cell/unitcell.h"
 #include "source_lcao/module_operator_lcao/operator_lcao.h"
 #include "source_hamilt/module_hcontainer/hcontainer.h"
+#include <memory>
 #include <unordered_map>
 #include <complex>
 
@@ -126,7 +127,7 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                     const int& iat2,
                     const std::unordered_map<int, std::vector<double>>& nlm1_all,
                     const std::unordered_map<int, std::vector<double>>& nlm2_all,
-                    TR* data_pointer);
+                    double* data_pointer);
 
     /**
      * @brief calculate the prepare HR for each atom
@@ -143,7 +144,7 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
      * @brief calculate the atomic magnetization moment for each <IJR>
     */
     void cal_moment_IJR(const double* dmR, 
-                        const TR* hr, 
+                        const double* hr,
                         const int row_size,
                         const int col_size,
                         double* moment);
@@ -176,16 +177,10 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                         const ModuleBase::Vector3<double>& dis2,
                         double* stress);
 
-    /**
-     * @brief calculate the array of coefficient of lambda * d\rho^p/drho^{\sigma\sigma'}
-    */
-    void pre_coeff_array(const std::vector<TR>& coeff, const int row_size, const int col_size);
-
     std::vector<bool> constraint_atom_list;
-    std::vector<hamilt::HContainer<TR>*> pre_hr;
+    std::vector<std::unique_ptr<hamilt::HContainer<double>>> pre_hr;
 
     std::vector<double> tmp_dmr_memory;
-    std::vector<TR> tmp_coeff_array;
     std::vector<double> lambda_save;
 
     bool initialized = false;

@@ -368,7 +368,7 @@
 
              // Save initial lambda: for unconstrained components (constrain==0), set to 0
              where_fill_scalar_else_2d(this->state_.constrain_, 0, zero, this->state_.get_sc_lambda(), initial_lambda);
-@@ -165,8 +198,50 @@
+@@ -165,8 +198,56 @@
                  }
              }
 
@@ -376,7 +376,8 @@
 -            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
 +            bool evaluated_in_subspace = false;
 +#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
-+            if (projected_inner)
++            const bool exhausted = i_step == this->state_.get_nsc() - 1;
++            if (projected_inner && !exhausted)
 +            {
 +                std::vector<ModuleBase::Vector3<double>> projected_moments;
 +                const bool available = this->try_lazy_projector_trial(anchor_lambda, true, projected_moments, ofs_running);
@@ -385,8 +386,7 @@
 +                    evaluated_in_subspace = true;
 +                    const double predicted = residual_rms(projected_moments);
 +                    const double threshold = this->state_.get_current_sc_thr();
-+                    const bool exhausted = i_step == this->state_.get_nsc() - 1;
-+                    if (exhausted || predicted < threshold)
++                    if (predicted < threshold)
 +                    {
 +                        this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
 +                        const auto& accepted_moments = this->state_.get_mi();
@@ -397,7 +397,7 @@
 +                            const auto error = projected_moments[atom] - accepted_moments[atom];
 +                            max_error = std::max(max_error, error.norm());
 +                        }
-+                        const bool reanchor = !exhausted && actual >= threshold;
++                        const bool reanchor = actual >= threshold;
 +                        ofs_running << "PW_STYLE_REFRESH outer " << outer_step << " inner " << i_step
 +                                    << " predicted " << predicted << " actual " << actual
 +                                    << " max_error_uB " << max_error << " reanchor " << reanchor << '\n';
@@ -417,11 +417,17 @@
 +            if (!evaluated_in_subspace)
 +            {
 +                this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++                if (projected_inner && exhausted)
++                {
++                    ofs_running << "PW_STYLE_BUDGET_REFRESH outer " << outer_step << " inner " << i_step << '\n';
++                }
++#endif
 +            }
              new_spin = this->state_.get_mi();
 
              // Check if gradient dM/dlambda has decayed below threshold
-@@ -321,6 +396,13 @@
+@@ -321,6 +402,13 @@
          // =============================================================
          // CUMULATIVE STEP UPDATE
          // =============================================================
@@ -435,7 +441,7 @@
          dnu_last_step = dnu;
          // dnu = dnu + alpha_trial * search
          add_scalar_multiply_2d(dnu, search, alpha_trial, dnu);
-@@ -350,8 +432,37 @@
+@@ -350,8 +438,37 @@
          // =============================================================
          // TRIAL STEP: compute Mi at trial position
          // =============================================================

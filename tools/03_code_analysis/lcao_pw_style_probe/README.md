@@ -12,8 +12,9 @@ projected Hamiltonian and moment contractions preserve the real-space
 - `pw-style` also evaluates intermediate corrected lambda values in the
   reference subspace. It refreshes the full accepted state and computes the
   actual residual from the density matrix that supplies the outer charge
-  update. A failed early convergence check refreshes the reference before
-  continuing within the remaining lambda budget.
+  update. At the iteration limit it refreshes directly. A failed early
+  convergence check refreshes the reference before continuing within the
+  remaining lambda budget.
 
 The probe interposes the CUDA eigensolver and assumes one geometry per
 process and two k-point owners with four k-points each. The CUDA file is
@@ -45,14 +46,18 @@ OMP_NUM_THREADS=1 mpirun -np 8 env LD_PRELOAD=/path/to/lazy_probe.so \
 ```
 
 In `pw-style`, `PW_STYLE_REFRESH` records the predicted RMS and the actual
-RMS from the accepted DMR. Check the final charge residual, actual magnetic
-RMS and absolute `DeltaE_womix` against the three input thresholds before
-comparing the `Driver:atomic_world` timers.
+RMS from the accepted DMR when a prediction suggests early convergence.
+`PW_STYLE_BUDGET_REFRESH` records a direct full refresh at the iteration limit.
+The following inner-step line reports the actual RMS in either case. Check
+the final charge residual, actual magnetic RMS and absolute `DeltaE_womix`
+against the three input thresholds before comparing the
+`Driver:atomic_world` timers.
 
 ## Observed Fe64 result
 
-The measured checkout included the GPU H(R) folding and density-gather
-changes in both modes. The paired run used two V100-SXM2 GPUs, eight MPI
+The initial comparison ran before the direct refresh at the iteration limit
+was added. The measured checkout included the GPU H(R) folding and
+density-gather changes in both modes. The paired run used two V100-SXM2 GPUs, eight MPI
 ranks, one OMP thread and CUDA 12.9.1. The 20.7% wall-time reduction is from
 one restart pair.
 

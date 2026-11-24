@@ -32,7 +32,7 @@ int offsets(const std::vector<int>& counts, std::vector<int>& displs)
 
 struct DensityGather::Impl
 {
-    HContainer<double> source;
+    size_t source_size;
     HContainer<double> serial;
     const Parallel_Orbitals* orbitals;
     std::vector<int> topology;
@@ -51,8 +51,11 @@ struct DensityGather::Impl
     std::vector<double> recv;
 
     Impl(const HContainer<double>& input, const HContainer<double>& layout)
-        : source(input), serial(layout), orbitals(input.get_paraV()), topology(input.get_ijr_info())
+        : serial(layout)
     {
+        source_size = input.get_nnr();
+        orbitals = input.get_paraV();
+        topology = input.get_ijr_info();
         if (orbitals)
         {
             rows = orbitals->get_indexes_row();
@@ -68,7 +71,7 @@ DensityGather::DensityGather(const HContainer<double>& source, const HContainer<
     auto& p = *impl_;
 #ifdef __MPI
     p.size = Parallel_Common::communicator_size(MPI_COMM_WORLD);
-    p.parallel_transfer.reset(new HTransPara<double>(p.size, &p.source));
+    p.parallel_transfer.reset(new HTransPara<double>(p.size, p.orbitals));
     p.serial_transfer.reset(new HTransSerial<double>(p.size, &p.serial));
     std::vector<int> sendcounts(p.size);
     std::vector<int> recvcounts(p.size);
@@ -115,7 +118,7 @@ DensityGather::~DensityGather() = default;
 bool DensityGather::matches(const HContainer<double>& source) const
 {
     const auto& p = *impl_;
-    if (p.orbitals != source.get_paraV() || p.source.get_nnr() != source.get_nnr()
+    if (p.orbitals != source.get_paraV() || p.source_size != source.get_nnr()
         || p.topology != source.get_ijr_info()) return false;
     return !p.orbitals || (p.rows == p.orbitals->get_indexes_row() && p.cols == p.orbitals->get_indexes_col());
 }
@@ -125,17 +128,22 @@ const HContainer<double>& DensityGather::gather(const HContainer<double>& source
     auto& p = *impl_;
     ModuleBase::timer::start("Gint", "dm_gather_values");
     if (!matches(source)) throw std::invalid_argument("density gather source layout changed");
-    if (source.get_nnr()) std::copy_n(source.get_wrapper(), source.get_nnr(), p.source.get_wrapper());
     p.serial.set_zero();
 #ifdef __MPI
     for (int rank = 0; rank < p.size; ++rank)
-        if (p.sendcounts[rank]) p.parallel_transfer->pack_data(rank, p.send.data() + p.senddispls[rank]);
+    {
+        if (p.sendcounts[rank])
+        {
+            double* values = p.send.data() + p.senddispls[rank];
+            p.parallel_transfer->pack_data(rank, source, values);
+        }
+    }
     Parallel_Common::alltoallv_double(p.send.data(), p.sendcounts.data(), p.senddispls.data(),
                                    p.recv.data(), p.recvcounts.data(), p.recvdispls.data(), MPI_COMM_WORLD);
     for (int rank = 0; rank < p.size; ++rank)
         if (p.recvcounts[rank]) p.serial_transfer->receive_data(rank, p.recv.data() + p.recvdispls[rank]);
 #else
-    p.serial.add(p.source);
+    p.serial.add(source);
 #endif
     ModuleBase::timer::end("Gint", "dm_gather_values");
     return p.serial;

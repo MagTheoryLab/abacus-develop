@@ -20,9 +20,21 @@ template <typename T>
 HTransPara<T>::HTransPara(int n_processes, HContainer<T>* hr_in)
 {
     this->hr = hr_in;
+    this->paraV = hr_in->get_paraV();
+    this->init_rank_storage(n_processes);
+}
+
+template <typename T>
+HTransPara<T>::HTransPara(int n_processes, const Parallel_Orbitals* layout) : paraV(layout)
+{
+    this->init_rank_storage(n_processes);
+}
+
+template <typename T>
+void HTransPara<T>::init_rank_storage(int n_processes)
+{
     this->ap_indexes.resize(n_processes);
     this->size_values.resize(n_processes);
-    this->paraV = hr_in->get_paraV();
     this->atom_i_index.resize(n_processes);
 }
 
@@ -196,6 +208,12 @@ void HTransPara<T>::receive_data(int irank, const T* values)
 template <typename T>
 void HTransPara<T>::pack_data(int irank, T* values)
 {
+    this->pack_data(irank, *this->hr, values);
+}
+
+template <typename T>
+void HTransPara<T>::pack_data(int irank, const HContainer<T>& source, T* values) const
+{
 #ifdef __DEBUG
     assert(values != nullptr);
     assert(this->size_values[irank] != 0);
@@ -222,9 +240,19 @@ void HTransPara<T>::pack_data(int irank, T* values)
                 r_index[2] = *ap_data++;
                 if (size_row > 0 && size_col > 0)
                 {
-                    const T* matrix_pointer = this->hr->data(atom_i, atom_j, r_index);
-                    ModuleBase::GlobalFunc::COPYARRAY(matrix_pointer, value_data, size_row * size_col);
-                    value_data += size_row * size_col;
+                    const int count = size_row * size_col;
+                    const auto* pair = source.find_pair(atom_i, atom_j);
+                    const auto* block = pair ? pair->find_matrix(r_index[0], r_index[1], r_index[2]) : nullptr;
+                    if (block)
+                    {
+                        const T* matrix_pointer = block->get_pointer();
+                        ModuleBase::GlobalFunc::COPYARRAY(matrix_pointer, value_data, count);
+                    }
+                    else
+                    {
+                        std::fill_n(value_data, count, T{});
+                    }
+                    value_data += count;
                 }
             }
         }

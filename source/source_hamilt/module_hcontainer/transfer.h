@@ -27,6 +27,8 @@ class HTransPara
 {
   public:
     HTransPara(int n_processes, HContainer<T>* hr_in);
+    // Build a pack-only transfer plan without retaining the input values.
+    HTransPara(int n_processes, const Parallel_Orbitals* layout);
     ~HTransPara();
 
     /**
@@ -70,11 +72,13 @@ class HTransPara
      * @param irank
      */
     void pack_data(int irank, T* values = nullptr);
+    void pack_data(int irank, const HContainer<T>& source, T* values) const;
 
     long get_max_size() const;
     void get_value_size(int* out) const;
 
   private:
+    void init_rank_storage(int n_processes);
     std::vector<std::vector<int>> ap_indexes;
     HContainer<T>* hr = nullptr;
 

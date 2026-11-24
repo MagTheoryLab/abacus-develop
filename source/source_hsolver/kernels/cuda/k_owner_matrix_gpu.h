@@ -13,7 +13,7 @@ namespace hsolver
 class KOwnerMatrixGpu
 {
   public:
-    KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank);
+    KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank, bool receives_matrices);
     ~KOwnerMatrixGpu();
     void gather(const std::complex<double>* h, const std::complex<double>* s, int owner);
     void gather_device(const std::complex<double>* h, const std::complex<double>* s, int owner);

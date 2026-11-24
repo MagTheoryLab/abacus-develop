@@ -84,6 +84,7 @@ struct HSolverLCAO<TK>::SolveContext
 #if defined(__CUDA) && defined(__MPI)
     std::unique_ptr<DiagoCusolver<TK>> cusolver;
     std::unique_ptr<KOwnerMatrixGpu> device_matrices;
+    int owner_count = 0;
 #endif
 };
 
@@ -96,8 +97,7 @@ HSolverLCAO<TK>::HSolverLCAO(const Parallel_Orbitals* ParaV_in,
                             const double nelec_in,
                             const bool use_gpu_in,
                             const int world_nproc_in,
-                            const int world_rank_in,
-                            const bool use_k_owner_dmr_in)
+                            const int world_rank_in)
     : ParaV(ParaV_in),
       method(method_in),
       kpar_lcao(kpar_lcao_in),
@@ -106,8 +106,7 @@ HSolverLCAO<TK>::HSolverLCAO(const Parallel_Orbitals* ParaV_in,
       nelec(nelec_in),
       use_gpu(use_gpu_in),
       world_nproc(world_nproc_in),
-      world_rank(world_rank_in),
-      use_k_owner_dmr(use_k_owner_dmr_in)
+      world_rank(world_rank_in)
 {
     solve_context_.reset(new SolveContext());
 }
@@ -123,6 +122,7 @@ void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
 								   Charge &chr,
                                    const int nspin,
                                    const double omega,
+                                   const bool use_k_owner_dmr,
                                    const bool skip_charge)
 {
     ModuleBase::TITLE("HSolverLCAO", "solve");
@@ -143,7 +143,7 @@ void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
     #ifdef __CUDA
         if (this->method == "cusolver")
         {
-            used_k_owner_dmr = this->use_k_owner_dmr;
+            used_k_owner_dmr = use_k_owner_dmr;
             this->parakSolve_cusolver(hs, psi, pes, used_k_owner_dmr ? &owner_wfc : nullptr);
         }
         else
@@ -503,12 +503,17 @@ void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
     std::vector<T> hk_mat; // temporary storage for H(k) matrix collected from all processes
     std::vector<T> sk_mat; // temporary storage for S(k) matrix collected from all processes
     // A single rank already owns the dense matrix; it needs no redistribution.
+    const int owner_count = std::min(nks, total_active_ranks);
     if (world_size > 1
         && owner_wfc != nullptr
         && std::is_same<T, std::complex<double>>::value
-        && !this->solve_context_->device_matrices)
+        && (!this->solve_context_->device_matrices || this->solve_context_->owner_count != owner_count))
     {
-        this->solve_context_->device_matrices.reset(new KOwnerMatrixGpu(*this->ParaV, world_rank));
+        const auto owners_end = active_ranks.begin() + owner_count;
+        const bool receives_matrices = std::find(active_ranks.begin(), owners_end, world_rank) != owners_end;
+        this->solve_context_->device_matrices.reset();
+        this->solve_context_->device_matrices.reset(new KOwnerMatrixGpu(*this->ParaV, world_rank, receives_matrices));
+        this->solve_context_->owner_count = owner_count;
     }
     KOwnerMatrixGpu* device_matrices
         = owner_wfc != nullptr ? this->solve_context_->device_matrices.get() : nullptr;

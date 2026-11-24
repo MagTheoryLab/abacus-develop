@@ -26,7 +26,8 @@
  *   step, lambda_eV_uB, Mi_x_0, Mi_y_0, Mi_z_0, Mi_x_1, ...
  */
 template <>
-void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(int outer_step, std::ostream& ofs_running)
+void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(
+    int outer_step, std::ostream& ofs_running, hsolver::HSolverLCAO<std::complex<double>>* lcao_solver)
 {
     int nat = this->get_nat();
     int ntype = this->get_ntype();
@@ -137,7 +138,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(
                              << " lambda = " << lambda_val_ev << " eV/uB ===" << std::endl;
 
         // Compute magnetic moments at current lambda
-        this->cal_mw_from_lambda(istep);
+        this->cal_mw_from_lambda(istep, nullptr, lcao_solver);
 
         // Save step 0 Mi for consistency verification
         if (istep == 0) {
@@ -171,7 +172,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(
     // =============================================================
     ofs_running << " [DS-DIAG] === Consistency check: restoring initial lambda ===" << std::endl;
     this->state_.get_lambda() = initial_lambda;
-    this->cal_mw_from_lambda(nsteps);
+    this->cal_mw_from_lambda(nsteps, nullptr, lcao_solver);
 
     // Write consistency check result
     ofs_scan << std::scientific << std::setprecision(6);

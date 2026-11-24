@@ -84,7 +84,7 @@ struct KOwnerMatrixGpu::Impl
     std::unique_ptr<Buffer<double2>> owner_s;
 };
 
-KOwnerMatrixGpu::KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank) : impl_(new Impl)
+KOwnerMatrixGpu::KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank, bool receives_matrices) : impl_(new Impl)
 {
     ModuleBase::timer::start("HSolverLCAO", "owner_gpu_layout");
     auto& p = *impl_;
@@ -113,11 +113,12 @@ KOwnerMatrixGpu::KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank) : im
                                   sizes.data(), displs.data(), MPI_COMM_WORLD);
     std::vector<int> pack;
     std::vector<int> unpack;
+    size_t upper_count = 0;
     p.counts.resize(ranks);
     p.offsets.resize(ranks);
     for (int r = 0; r < ranks; ++r)
     {
-        p.offsets[r] = mpi_size(2 * unpack.size());
+        p.offsets[r] = mpi_size(2 * upper_count);
         const int nr = all_dims[2 * r];
         const int nc = all_dims[2 * r + 1];
         for (int c = 0; c < nc; ++c)
@@ -127,31 +128,36 @@ KOwnerMatrixGpu::KOwnerMatrixGpu(const Parallel_2D& layout, int world_rank) : im
             {
                 const int gr = indices[displs[r] + i];
                 if (gr > gc) continue;
-                unpack.push_back(gc * n + gr);
+                ++upper_count;
+                if (receives_matrices) unpack.push_back(gc * n + gr);
                 if (r == p.rank) pack.push_back(c * nr + i);
             }
         }
-        p.counts[r] = mpi_size(2 * unpack.size()) - p.offsets[r];
+        p.counts[r] = mpi_size(2 * upper_count) - p.offsets[r];
     }
     p.local_upper = mpi_size(pack.size());
-    p.global_upper = mpi_size(unpack.size());
-    if (unpack.size() != static_cast<size_t>(n) * (n + 1) / 2)
+    p.global_upper = mpi_size(upper_count);
+    if (upper_count != static_cast<size_t>(n) * (n + 1) / 2)
         throw std::runtime_error("K-owner H/S layout does not cover a complete matrix");
     p.sendcounts.resize(ranks);
     p.sendoffsets.resize(ranks);
     p.recvcounts.resize(ranks);
     p.recvoffsets.resize(ranks);
     p.pack_indices.reset(new Buffer<int>(pack.size(), false));
-    p.unpack_indices.reset(new Buffer<int>(unpack.size(), false));
     if (!pack.empty()) CHECK_CUDA(cudaMemcpy(p.pack_indices->device, pack.data(), pack.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(p.unpack_indices->device, unpack.data(), unpack.size() * sizeof(int), cudaMemcpyHostToDevice));
     p.send.reset(new Buffer<double2>(2 * pack.size(), true));
-    p.recv.reset(new Buffer<double2>(2 * unpack.size(), true));
-    p.owner_h.reset(new Buffer<double2>(dense, false));
-    p.owner_s.reset(new Buffer<double2>(dense, false));
-    // Only the upper triangle is consumed by cuSolver (UPLO=U).
-    CHECK_CUDA(cudaMemset(p.owner_h->device, 0, dense * sizeof(double2)));
-    CHECK_CUDA(cudaMemset(p.owner_s->device, 0, dense * sizeof(double2)));
+    if (receives_matrices)
+    {
+        p.unpack_indices.reset(new Buffer<int>(unpack.size(), false));
+        CHECK_CUDA(cudaMemcpy(p.unpack_indices->device, unpack.data(), unpack.size() * sizeof(int), cudaMemcpyHostToDevice));
+        const size_t packed_size = 2 * unpack.size();
+        p.recv.reset(new Buffer<double2>(packed_size, true));
+        p.owner_h.reset(new Buffer<double2>(dense, false));
+        p.owner_s.reset(new Buffer<double2>(dense, false));
+        // Only the upper triangle is consumed by cuSolver (UPLO=U).
+        CHECK_CUDA(cudaMemset(p.owner_h->device, 0, dense * sizeof(double2)));
+        CHECK_CUDA(cudaMemset(p.owner_s->device, 0, dense * sizeof(double2)));
+    }
     ModuleBase::timer::end("HSolverLCAO", "owner_gpu_layout");
 }
 
@@ -189,16 +195,19 @@ void KOwnerMatrixGpu::gather_device(const std::complex<double>* h, const std::co
     std::fill(p.sendcounts.begin(), p.sendcounts.end(), 0);
     p.sendcounts[owner] = 2 * p.local_upper;
     std::fill(p.recvcounts.begin(), p.recvcounts.end(), 0);
+    std::complex<double> unused_recv;
+    auto* recv = &unused_recv;
     if (p.rank == owner)
     {
         p.recvcounts = p.counts;
         p.recvoffsets = p.offsets;
+        recv = reinterpret_cast<std::complex<double>*>(p.recv->host);
     }
     // Deliberate pinned-host transport: no dependency on CUDA-aware MPI.
     MPI_Comm comm = MPI_COMM_WORLD;
     Parallel_Common::alltoallv_data(reinterpret_cast<std::complex<double>*>(p.send->host),
                                   p.sendcounts.data(), p.sendoffsets.data(),
-                                  reinterpret_cast<std::complex<double>*>(p.recv->host),
+                                  recv,
                                   p.recvcounts.data(), p.recvoffsets.data(), comm);
     if (p.rank == owner)
     {
@@ -212,10 +221,10 @@ void KOwnerMatrixGpu::gather_device(const std::complex<double>* h, const std::co
 
 std::complex<double>* KOwnerMatrixGpu::h_device()
 {
-    return reinterpret_cast<std::complex<double>*>(impl_->owner_h->device);
+    return impl_->owner_h ? reinterpret_cast<std::complex<double>*>(impl_->owner_h->device) : nullptr;
 }
 std::complex<double>* KOwnerMatrixGpu::s_device()
 {
-    return reinterpret_cast<std::complex<double>*>(impl_->owner_s->device);
+    return impl_->owner_s ? reinterpret_cast<std::complex<double>*>(impl_->owner_s->device) : nullptr;
 }
 }

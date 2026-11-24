@@ -26,8 +26,7 @@ class HSolverLCAO
                 const double nelec_in,
                 const bool use_gpu_in,
                 const int world_nproc_in,
-                const int world_rank_in,
-                const bool use_k_owner_dmr_in);
+                const int world_rank_in);
     ~HSolverLCAO();
 
     HSolverLCAO(const HSolverLCAO&) = delete;
@@ -41,6 +40,7 @@ class HSolverLCAO
 			   Charge &chr, // charge density
 			   const int nspin,
                const double omega, // current cell volume (ucell.omega), NOT rhopw->omega
+               const bool use_k_owner_dmr,
 			   const bool skip_charge);
 
   private:
@@ -72,7 +72,6 @@ class HSolverLCAO
     const bool use_gpu;  // true if running on GPU, only used by the native-ELPA branch
     const int world_nproc;
     const int world_rank;
-    const bool use_k_owner_dmr; // keep cuSolver eigenvectors on their k owner and form DMR there
 
     struct SolveContext;
     std::unique_ptr<SolveContext> solve_context_;

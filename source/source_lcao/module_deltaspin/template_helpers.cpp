@@ -27,7 +27,8 @@
 /// @brief cal_mw_from_lambda stub (TK=double): no-op
 template <>
 void spinconstrain::SpinConstrain<double>::cal_mw_from_lambda(int i_step,
-        const ModuleBase::Vector3<double>* delta_lambda)
+        const ModuleBase::Vector3<double>* delta_lambda,
+        hsolver::HSolverLCAO<double>* lcao_solver)
 {
 }
 
@@ -41,7 +42,8 @@ void spinconstrain::SpinConstrain<double>::cal_mi_lcao(const int& step, bool pri
 template <>
 void spinconstrain::SpinConstrain<double>::run_lambda_loop(int outer_step,
         bool rerun,
-        std::ostream& ofs_running)
+        std::ostream& ofs_running,
+        hsolver::HSolverLCAO<double>* lcao_solver)
 {
 }
 
@@ -106,7 +108,8 @@ bool spinconstrain::check_gradient_decay<double>(const spinconstrain::SpinConstr
 
 /// @brief run_lambda_linear_scan stub (TK=double): no-op
 template <>
-void spinconstrain::SpinConstrain<double>::run_lambda_linear_scan(int outer_step, std::ostream& ofs_running)
+void spinconstrain::SpinConstrain<double>::run_lambda_linear_scan(
+    int outer_step, std::ostream& ofs_running, hsolver::HSolverLCAO<double>* lcao_solver)
 {
 }
 

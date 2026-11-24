@@ -454,10 +454,10 @@ void ESolver_KS_LCAO_TDDFT<TR, Device>::hamilt2rho_single(UnitCell& ucell, const
                                                                         this->inp_->nelec,
                                                                         this->inp_->device == "gpu",
                                                                         GlobalV::NPROC,
-                                                                        GlobalV::MY_RANK,
-                                              false);
+                                                                        GlobalV::MY_RANK);
             hamilt::HamiltHSMatrix<std::complex<double>> hs(static_cast<hamilt::Hamilt<std::complex<double>>*>(this->p_hamilt));
-            hsolver_lcao_obj.solve(hs, this->psi[0], this->pelec, *this->dmat.dm, this->chr, this->inp_->nspin, ucell.omega, skip_charge);
+            hsolver_lcao_obj.solve(hs, this->psi[0], this->pelec, *this->dmat.dm, this->chr, this->inp_->nspin,
+                                  ucell.omega, false, skip_charge);
             if (this->inp_->td_stype == 2)
             {
                 // Taoni add 2026-10-11

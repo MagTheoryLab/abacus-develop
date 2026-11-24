@@ -20,9 +20,7 @@ Complex s_value(int i, int j)
 {
     return i == j ? 1.0 + 0.01 * i : 0.0;
 }
-}
-
-TEST(KOwnerMatrixGpu, UpperTriangleRotatingOwnerAndDeviceSolve)
+void check_owners(int owner_count)
 {
     int devices = 0;
     CHECK_CUDA(cudaGetDeviceCount(&devices));
@@ -31,7 +29,10 @@ TEST(KOwnerMatrixGpu, UpperTriangleRotatingOwnerAndDeviceSolve)
     const int n = 13;
     Parallel_2D layout;
     layout.init(n, n, 2, MPI_COMM_WORLD);
-    hsolver::KOwnerMatrixGpu gather(layout, test_rank);
+    const bool receives_matrices = test_rank < owner_count;
+    hsolver::KOwnerMatrixGpu gather(layout, test_rank, receives_matrices);
+    EXPECT_EQ(gather.h_device() != nullptr, receives_matrices);
+    EXPECT_EQ(gather.s_device() != nullptr, receives_matrices);
     std::vector<Complex> h(layout.get_local_size());
     std::vector<Complex> s(h.size());
     for (int pass = 0; pass < 3; ++pass)
@@ -45,7 +46,7 @@ TEST(KOwnerMatrixGpu, UpperTriangleRotatingOwnerAndDeviceSolve)
                 h[offset] = i <= j ? h_value(i, j, pass) : Complex(-9999.0, 123.0);
                 s[offset] = i <= j ? s_value(i, j) : Complex(-9999.0, 123.0);
             }
-        for (int owner = 0; owner < test_size; ++owner)
+        for (int owner = 0; owner < owner_count; ++owner)
         {
             gather.gather(h.data(), s.data(), owner);
             if (test_rank != owner) continue;
@@ -78,6 +79,17 @@ TEST(KOwnerMatrixGpu, UpperTriangleRotatingOwnerAndDeviceSolve)
                 }
         }
     }
+}
+}
+
+TEST(KOwnerMatrixGpu, UpperTriangleRotatingOwnerAndDeviceSolve)
+{
+    check_owners(test_size);
+}
+
+TEST(KOwnerMatrixGpu, SendOnlyRanksUseNoDenseDestination)
+{
+    check_owners(1);
 }
 
 int main(int argc, char** argv)

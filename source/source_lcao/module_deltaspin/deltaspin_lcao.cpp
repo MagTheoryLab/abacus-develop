@@ -137,14 +137,14 @@ bool run_deltaspin_lambda_loop_lcao(const int iter,
         if (!sc.mag_converged() && drho > 0 && drho < inp.sc_scf_thr)
         {
             /// Charge density is stable enough: optimize lambda for the first time
-            sc.run_lambda_loop(iter, true, ofs_running);
+            sc.run_lambda_loop(iter, true, ofs_running, nullptr);
             sc.set_mag_converged(true);
             skip_solve = true;
         }
         else if (sc.mag_converged())
         {
             /// Already converged: refine lambda for the current charge density
-            sc.run_lambda_loop(iter, true, ofs_running);
+            sc.run_lambda_loop(iter, true, ofs_running, nullptr);
             skip_solve = true;
         }
     }

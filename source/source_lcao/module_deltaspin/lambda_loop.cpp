@@ -70,7 +70,8 @@
  *   - decay_grad thresholds are not too aggressive
  */
 template <>
-void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(int outer_step, bool rerun, std::ostream& ofs_running)
+void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
+    int outer_step, bool rerun, std::ostream& ofs_running, hsolver::HSolverLCAO<std::complex<double>>* lcao_solver)
 {
     int nat = this->get_nat();
     int ntype = this->get_ntype();
@@ -121,7 +122,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(int out
             // STEP -1: INITIALIZATION
             // Compute initial magnetic moments and save starting state
             // =============================================================
-            this->cal_mw_from_lambda(i_step);
+            this->cal_mw_from_lambda(i_step, nullptr, lcao_solver);
             spin = this->state_.get_mi();
 
             // Save initial lambda: for unconstrained components (constrain==0), set to 0
@@ -165,7 +166,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(int out
             }
 
             // Apply lambda and compute new magnetic moments
-            this->cal_mw_from_lambda(i_step, delta_lambda.data());
+            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
             new_spin = this->state_.get_mi();
 
             // Check if gradient dM/dlambda has decayed below threshold
@@ -289,7 +290,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(int out
                 {
                     std::cout<<" DeltaSpin: RMS error too large ("<<rms_error<<"), rerun inner loop with full PW solver"<<std::endl;
                     std::cout<<std::endl;
-                    this->run_lambda_loop(outer_step, false, ofs_running);
+                    this->run_lambda_loop(outer_step, false, ofs_running, lcao_solver);
                 }
             }
             break;
@@ -349,7 +350,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(int out
         // =============================================================
         // TRIAL STEP: compute Mi at trial position
         // =============================================================
-        this->cal_mw_from_lambda(i_step, delta_lambda.data());
+        this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
         spin_plus = this->state_.get_mi();
 
         // Find optimal step size via linear interpolation

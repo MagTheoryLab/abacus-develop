@@ -573,27 +573,46 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     this->pelec->f_en.eband = 0.0;
     this->pelec->f_en.demet = 0.0;
     bool skip_charge = this->inp_->calculation == "nscf" ? true : false;
+    const int world_nproc = GlobalV::NPROC;
+    const int world_rank = GlobalV::MY_RANK;
+    const int kpar_lcao = PARAM.globalv.kpar_lcao;
+    const int nlocal = PARAM.globalv.nlocal;
+    const bool use_gpu = this->inp_->device == "gpu";
+    if (this->inp_->ks_solver == "cusolver" && !this->cusolver_lcao_)
+    {
+        this->cusolver_lcao_.reset(new hsolver::HSolverLCAO<TK>(&this->pv,
+                                                               this->inp_->ks_solver,
+                                                               kpar_lcao,
+                                                               nlocal,
+                                                               this->inp_->nbands,
+                                                               this->inp_->nelec,
+                                                               use_gpu,
+                                                               world_nproc,
+                                                               world_rank));
+    }
 
     // 2) run the inner lambda loop to constrain atomic moments with the DeltaSpin method
     bool skip_solve = false;
     if (this->inp_->sc_mag_switch)
     {
         spinconstrain::SpinConstrain<TK>& sc = spinconstrain::SpinConstrain<TK>::getScInstance();
+        const int outer_step = iter - 1;
+        auto* lcao_solver = this->cusolver_lcao_.get();
         if (this->inp_->sc_lambda_strategy == "linear_scan")
         {
-            sc.run_lambda_linear_scan(iter - 1, GlobalV::ofs_running);
+            sc.run_lambda_linear_scan(outer_step, GlobalV::ofs_running, lcao_solver);
             skip_solve = true;
         }
         else if (!sc.mag_converged() && this->drho > 0 && this->drho < this->inp_->sc_scf_thr)
         {
-            sc.run_lambda_loop(iter - 1, true, GlobalV::ofs_running);
+            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver);
             this->ds_rms_ = sc.get_last_rms_error();
             sc.set_mag_converged(true);
             skip_solve = true;
         }
         else if (sc.mag_converged())
         {
-            sc.run_lambda_loop(iter - 1, true, GlobalV::ofs_running);
+            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver);
             this->ds_rms_ = sc.get_last_rms_error();
             skip_solve = true;
         }
@@ -619,26 +638,9 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                      && !this->inp_->rdmft
                                      && !this->inp_->qo_switch
                                      && !this->exx_info_.info_global.cal_exx;
-        const int world_nproc = GlobalV::NPROC;
-        const int world_rank = GlobalV::MY_RANK;
-        const int kpar_lcao = PARAM.globalv.kpar_lcao;
-        const int nlocal = PARAM.globalv.nlocal;
         hamilt::HamiltHSMatrix<TK> hs(static_cast<hamilt::Hamilt<TK>*>(this->p_hamilt));
-        if (this->inp_->ks_solver == "cusolver")
+        if (this->cusolver_lcao_)
         {
-            if (!this->cusolver_lcao_)
-            {
-                this->cusolver_lcao_.reset(new hsolver::HSolverLCAO<TK>(&(this->pv),
-                                                                        this->inp_->ks_solver,
-                                                                        kpar_lcao,
-                                                                        nlocal,
-                                                                        this->inp_->nbands,
-                                                                        this->inp_->nelec,
-                                                                        this->inp_->device == "gpu",
-                                                                        world_nproc,
-                                                                        world_rank,
-                                                                        use_k_owner_dmr));
-            }
             this->cusolver_lcao_->solve(hs,
                                         this->psi[0],
                                         this->pelec,
@@ -646,7 +648,8 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                         this->chr,
                                         this->inp_->nspin,
                                         ucell.omega,
-                                   skip_charge);
+                                        use_k_owner_dmr,
+                                        skip_charge);
         }
         else
         {
@@ -656,10 +659,9 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                                       nlocal,
                                                       this->inp_->nbands,
                                                       this->inp_->nelec,
-                                                      this->inp_->device == "gpu",
+                                                      use_gpu,
                                                       world_nproc,
-                                                      world_rank,
-                                                      use_k_owner_dmr);
+                                                      world_rank);
             hsolver_lcao_obj.solve(hs,
                                    this->psi[0],
                                    this->pelec,
@@ -667,6 +669,7 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                    this->chr,
                                    this->inp_->nspin,
                                    ucell.omega,
+                                   use_k_owner_dmr,
                                    skip_charge);
         }
     }

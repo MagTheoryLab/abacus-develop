@@ -130,7 +130,7 @@ class ESolver_KS_LCAO : public ESolver_KS
     //! Control grid-integration precision and its switching during SCF iterations.
     GintPrecisionController gint_precision_controller_;
 
-    //! Reuse cuSolver GPU allocations and distribution metadata across SCF iterations.
+    //! Own the cuSolver workspace used by both ordinary SCF and DeltaSpin.
     std::unique_ptr<hsolver::HSolverLCAO<TK>> cusolver_lcao_;
 };
 } // namespace ModuleESolver

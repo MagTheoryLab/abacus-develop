@@ -66,6 +66,12 @@
 #include "source_estate/module_dm/density_matrix.h" // mohan add 2025-11-02
 #endif
 
+namespace hsolver
+{
+template <typename TK>
+class HSolverLCAO;
+}
+
 namespace spinconstrain
 {
 
@@ -198,7 +204,8 @@ public:
    * @param delta_lambda Change in lambda from previous step (for incremental H correction)
    */
   void cal_mw_from_lambda(int i_step,
-          const ModuleBase::Vector3<double>* delta_lambda = nullptr);
+          const ModuleBase::Vector3<double>* delta_lambda,
+          hsolver::HSolverLCAO<TK>* lcao_solver);
 
   /**
    * @brief Calculate the spin constraint energy contribution: E_scon = -sum(lambda_i . Mi_i).
@@ -229,7 +236,8 @@ public:
    */
   void run_lambda_loop(int outer_step,
           bool rerun,
-          std::ostream& ofs_running);
+          std::ostream& ofs_running,
+          hsolver::HSolverLCAO<TK>* lcao_solver);
 
   /// @brief RMS error of the most recent lambda optimization loop (-1.0 if none has run).
   double get_last_rms_error() const { return last_rms_error_; }
@@ -243,7 +251,7 @@ public:
    *
    * @param outer_step Current SCF outer iteration number
    */
-  void run_lambda_linear_scan(int outer_step, std::ostream& ofs_running);
+  void run_lambda_linear_scan(int outer_step, std::ostream& ofs_running, hsolver::HSolverLCAO<TK>* lcao_solver);
 
   /// @brief Reset DeltaSpin operator initialization state when constraints change
   void reset_dspin_operator();

@@ -14,6 +14,8 @@
 #include "source_pw/module_proj/onsite_proj.h"
 #include "spin_constrain.h"
 
+#include <memory>
+
 #ifdef __LCAO
 #include "source_estate/elecstate_lcao.h"
 #include "source_estate/module_dm/dm_from_psi.h"
@@ -90,7 +92,8 @@
 template <>
 void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         int i_step,
-        const ModuleBase::Vector3<double>* delta_lambda)
+        const ModuleBase::Vector3<double>* delta_lambda,
+        hsolver::HSolverLCAO<std::complex<double>>* lcao_solver)
 {
     ModuleBase::TITLE("spinconstrain::SpinConstrain", "cal_mw_from_lambda");
     ModuleBase::timer::start("spinconstrain::SpinConstrain", "cal_mw_from_lambda");
@@ -108,16 +111,21 @@ void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         // =============================================================
         psi::Psi<std::complex<double>>* psi_t = static_cast<psi::Psi<std::complex<double>>*>(this->psi);
         hamilt::Hamilt<std::complex<double>>* hamilt_t = static_cast<hamilt::Hamilt<std::complex<double>>*>(this->p_hamilt);
-        hsolver::HSolverLCAO<std::complex<double>> hsolver_t(this->ParaV,
-                                                            PARAM.inp.ks_solver,
-                                                            PARAM.globalv.kpar_lcao,
-                                                            PARAM.globalv.nlocal,
-                                                            PARAM.inp.nbands,
-                                                            PARAM.inp.nelec,
-                                                            PARAM.inp.device == "gpu",
-                                                            GlobalV::NPROC,
-                                                            GlobalV::MY_RANK,
-                                                            this->state_.nspin_ == 4);
+        std::unique_ptr<hsolver::HSolverLCAO<std::complex<double>>> local_solver;
+        if (lcao_solver == nullptr)
+        {
+            const bool use_gpu = PARAM.inp.device == "gpu";
+            local_solver.reset(new hsolver::HSolverLCAO<std::complex<double>>(this->ParaV,
+                                                                             PARAM.inp.ks_solver,
+                                                                             PARAM.globalv.kpar_lcao,
+                                                                             PARAM.globalv.nlocal,
+                                                                             PARAM.inp.nbands,
+                                                                             PARAM.inp.nelec,
+                                                                             use_gpu,
+                                                                             GlobalV::NPROC,
+                                                                             GlobalV::MY_RANK));
+            lcao_solver = local_solver.get();
+        }
         if (this->state_.nspin_ == 2)
         {
             dynamic_cast<hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, double>>*>(this->p_operator)
@@ -133,7 +141,10 @@ void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         // omega is unused here because skip_charge=true; rhopw->omega is passed only to satisfy the
         // signature and would be stale in NPT anyway (see Charge::renormalize_rho).
         hamilt::HamiltHSMatrix<std::complex<double>> hs(hamilt_t);
-        hsolver_t.solve(hs, psi_t[0], this->pelec, *this->dm_, *this->pelec->charge, this->state_.nspin_, this->pelec->charge->rhopw->omega, true);
+        const bool use_k_owner_dmr = this->state_.nspin_ == 4;
+        const double omega = this->pelec->charge->rhopw->omega;
+        lcao_solver->solve(hs, psi_t[0], this->pelec, *this->dm_, *this->pelec->charge,
+                           this->state_.nspin_, omega, use_k_owner_dmr, true);
         // Note: although update_lambda() modifies lambda in-place above,
         // solve() unconditionally rebuilds DMR from the eigenvectors obtained
         // with the new lambda. Therefore cal_mi_lcao() never observes a stale

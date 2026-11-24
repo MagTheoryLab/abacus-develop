@@ -598,22 +598,18 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
         spinconstrain::SpinConstrain<TK>& sc = spinconstrain::SpinConstrain<TK>::getScInstance();
         const int outer_step = iter - 1;
         auto* lcao_solver = this->cusolver_lcao_.get();
+        const bool use_lcao_ritz = this->inp_->sc_lambda_strategy == "lcao_ritz"
+                                  && this->inp_->device == "gpu" && this->inp_->nspin == 4;
         if (this->inp_->sc_lambda_strategy == "linear_scan")
         {
             sc.run_lambda_linear_scan(outer_step, GlobalV::ofs_running, lcao_solver);
             skip_solve = true;
         }
-        else if (!sc.mag_converged() && this->drho > 0 && this->drho < this->inp_->sc_scf_thr)
+        else if (sc.mag_converged() || (this->drho > 0 && this->drho < this->inp_->sc_scf_thr))
         {
-            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver);
+            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver, use_lcao_ritz);
             this->ds_rms_ = sc.get_last_rms_error();
             sc.set_mag_converged(true);
-            skip_solve = true;
-        }
-        else if (sc.mag_converged())
-        {
-            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver);
-            this->ds_rms_ = sc.get_last_rms_error();
             skip_solve = true;
         }
     }

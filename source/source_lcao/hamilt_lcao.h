@@ -34,6 +34,7 @@ struct Input_para;
 
 namespace hamilt
 {
+enum class LcaoFolding;
 #ifdef __CUDA
 class FoldingHrGpu;
 #endif
@@ -158,7 +159,7 @@ class HamiltLCAO : public Hamilt<TK>
 
   private:
 
-    void updateHk_impl(int ik, bool fold_k);
+    bool updateHk_impl(int ik, LcaoFolding folding);
 #ifdef __CUDA
     // Geometry-owned metadata; numerical H(R) validity is tracked separately.
     std::unique_ptr<FoldingHrGpu> h_fold_;

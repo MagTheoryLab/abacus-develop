@@ -138,7 +138,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(
                              << " lambda = " << lambda_val_ev << " eV/uB ===" << std::endl;
 
         // Compute magnetic moments at current lambda
-        this->cal_mw_from_lambda(istep, nullptr, lcao_solver);
+        this->cal_mw_from_lambda(istep, nullptr, lcao_solver, nullptr);
 
         // Save step 0 Mi for consistency verification
         if (istep == 0) {
@@ -172,7 +172,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_linear_scan(
     // =============================================================
     ofs_running << " [DS-DIAG] === Consistency check: restoring initial lambda ===" << std::endl;
     this->state_.get_lambda() = initial_lambda;
-    this->cal_mw_from_lambda(nsteps, nullptr, lcao_solver);
+    this->cal_mw_from_lambda(nsteps, nullptr, lcao_solver, nullptr);
 
     // Write consistency check result
     ofs_scan << std::scientific << std::setprecision(6);

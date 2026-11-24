@@ -13,6 +13,11 @@
 
 namespace hsolver
 {
+struct LcaoRitzReference
+{
+    int bands = 0;
+    std::vector<std::vector<double>> energy_by_k;
+};
 
 template <typename TK>
 class HSolverLCAO
@@ -43,6 +48,19 @@ class HSolverLCAO
                const bool use_k_owner_dmr,
 			   const bool skip_charge);
 
+    // The optional reference requests extra eigenvectors on the actual k owners.
+    // Density and occupations still use the physical band count.
+    void solve(HSMatrix<TK>& hs,
+               psi::Psi<TK>& psi,
+               elecstate::ElecState* pes,
+               module_dm::DensityMatrix<TK, double>& dm,
+               Charge& chr,
+               int nspin,
+               double omega,
+               bool use_k_owner_dmr,
+               bool skip_charge,
+               LcaoRitzReference* reference);
+
   private:
     void hamiltSolvePsiK(ModuleBase::MatrixBlock<TK>& hk,
                          ModuleBase::MatrixBlock<TK>& sk,
@@ -59,7 +77,8 @@ class HSolverLCAO
     void parakSolve_cusolver(HSMatrix<TK>& hs,
                              psi::Psi<TK>& psi,
                              elecstate::ElecState* pes,
-                             std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>* owner_wfc);
+                             std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>* owner_wfc,
+                             LcaoRitzReference* reference);
 
     const Parallel_Orbitals* ParaV = nullptr;
 

@@ -15,6 +15,10 @@ list(APPEND objects
     mi_tools.cpp
 )
 
+if(ENABLE_LCAO AND USE_CUDA AND ENABLE_MPI)
+    list(APPEND objects lcao_ritz_gpu.cu lcao_ritz_trial.cpp)
+endif()
+
 add_library(
     deltaspin
     OBJECT

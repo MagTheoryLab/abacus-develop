@@ -8,6 +8,15 @@
 #include "lambda_loop_helper.h"
 #include "source_base/constants.h"
 #include "source_io/module_parameter/parameter.h"
+#include "source_hsolver/hsolver_lcao.h"
+
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+#include "lcao_ritz_trial.h"
+#include "source_estate/elecstate_lcao.h"
+#include "source_lcao/module_operator_lcao/dspin_lcao.h"
+#include <algorithm>
+#include <limits>
+#endif
 
 /**
  * @file lambda_loop.cpp
@@ -71,7 +80,8 @@
  */
 template <>
 void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
-    int outer_step, bool rerun, std::ostream& ofs_running, hsolver::HSolverLCAO<std::complex<double>>* lcao_solver)
+    int outer_step, bool rerun, std::ostream& ofs_running, hsolver::HSolverLCAO<std::complex<double>>* lcao_solver,
+    bool use_lcao_ritz)
 {
     int nat = this->get_nat();
     int ntype = this->get_ntype();
@@ -105,6 +115,64 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
 #endif
 
     double inner_loop_duration = 0.0;
+    hsolver::LcaoRitzReference* capture_reference = nullptr;
+
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+    using Complex = std::complex<double>;
+    using Dspin = hamilt::DeltaSpin<hamilt::OperatorLCAO<Complex, Complex>>;
+    const auto& decay_grad = this->state_.get_decay_grad();
+    const bool check_decay = std::any_of(decay_grad.begin(), decay_grad.end(), [](double value) { return value > 0; });
+    bool projected = use_lcao_ritz && lcao_solver && this->state_.nspin_ == 4 && this->state_.get_nsc() > 2
+                     && !this->state_.direction_only_ && !check_decay && !this->pelec->skip_weights;
+    hsolver::LcaoRitzReference reference;
+    std::unique_ptr<LcaoRitzTrial> ritz;
+    std::vector<ModuleBase::Vector3<double>> reference_lambda;
+    const int bands = this->pelec->ekb.nc;
+    int nlocal = 0;
+    if (projected)
+    {
+        nlocal = this->ParaV->get_global_row_size();
+        const int limit = std::numeric_limits<int>::max();
+        projected = nlocal > bands && nlocal % 2 == 0 && nlocal <= limit / nlocal && nat > 0 && nat <= 65535;
+        if (projected)
+        {
+            reference.bands = std::min(nlocal, bands + (bands + 1) / 2);
+            capture_reference = &reference;
+        }
+    }
+
+    const auto residual_rms = [&](const std::vector<ModuleBase::Vector3<double>>& moments) {
+        double square = 0;
+        for (int ia = 0; ia < nat; ++ia)
+        {
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                if (this->state_.constrain_[ia][axis] != 0)
+                {
+                    const double difference = moments[ia][axis] - this->state_.target_mag_[ia][axis];
+                    square += difference * difference;
+                }
+            }
+        }
+        return std::sqrt(square / nat);
+    };
+
+    const auto evaluate_trial = [&]() {
+        if (!ritz)
+        {
+            const auto* estate = static_cast<const elecstate::ElecStateLCAO<Complex>*>(this->pelec);
+            const auto* dspin = static_cast<const Dspin*>(this->p_operator);
+            ritz.reset(new LcaoRitzTrial(*estate, *dspin, reference, reference_lambda, nlocal));
+        }
+        return ritz->evaluate(this->state_.get_sc_lambda(), this->state_.get_mi(), outer_step, ofs_running);
+    };
+
+    const auto stop_projecting = [&]() {
+        projected = false;
+        ritz.reset();
+        reference.energy_by_k.clear();
+    };
+#endif
 
     print_header(*this, ofs_running);
 
@@ -122,8 +190,14 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
             // STEP -1: INITIALIZATION
             // Compute initial magnetic moments and save starting state
             // =============================================================
-            this->cal_mw_from_lambda(i_step, nullptr, lcao_solver);
+            this->cal_mw_from_lambda(i_step, nullptr, lcao_solver, capture_reference);
             spin = this->state_.get_mi();
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+            if (projected)
+            {
+                reference_lambda = this->state_.get_sc_lambda();
+            }
+#endif
 
             // Save initial lambda: for unconstrained components (constrain==0), set to 0
             where_fill_scalar_else_2d(this->state_.constrain_, 0, zero, this->state_.get_sc_lambda(), initial_lambda);
@@ -165,8 +239,42 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
                 }
             }
 
-            // Apply lambda and compute new magnetic moments
-            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
+            bool subspace_only = false;
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+            const bool exhausted = i_step == this->state_.get_nsc() - 1;
+            if (projected && !exhausted)
+            {
+                if (!evaluate_trial())
+                {
+                    stop_projecting();
+                }
+                else
+                {
+                    subspace_only = residual_rms(this->state_.get_mi()) >= this->state_.get_current_sc_thr();
+                }
+            }
+#endif
+            if (!subspace_only)
+            {
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+                const bool refresh_ritz = projected;
+                if (refresh_ritz)
+                {
+                    // If exact verification rejects early convergence, the
+                    // rest of the lambda budget runs on the exact path.
+                    stop_projecting();
+                }
+#endif
+                this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver, nullptr);
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+                if (refresh_ritz)
+                {
+                    const double actual = residual_rms(this->state_.get_mi());
+                    ofs_running << "LCAO_RITZ_REFRESH outer " << outer_step << " inner " << i_step
+                                << " actual_rms_uB " << actual << '\n';
+                }
+#endif
+            }
             new_spin = this->state_.get_mi();
 
             // Check if gradient dM/dlambda has decayed below threshold
@@ -290,7 +398,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
                 {
                     std::cout<<" DeltaSpin: RMS error too large ("<<rms_error<<"), rerun inner loop with full PW solver"<<std::endl;
                     std::cout<<std::endl;
-                    this->run_lambda_loop(outer_step, false, ofs_running, lcao_solver);
+                    this->run_lambda_loop(outer_step, false, ofs_running, lcao_solver, false);
                 }
             }
             break;
@@ -350,7 +458,22 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
         // =============================================================
         // TRIAL STEP: compute Mi at trial position
         // =============================================================
-        this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
+        bool projected_trial = false;
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+        if (projected)
+        {
+            projected_trial = evaluate_trial();
+            if (!projected_trial)
+            {
+                ofs_running << "LCAO_RITZ_FALLBACK outer " << outer_step << '\n';
+                stop_projecting();
+            }
+        }
+#endif
+        if (!projected_trial)
+        {
+            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver, nullptr);
+        }
         spin_plus = this->state_.get_mi();
 
         // Find optimal step size via linear interpolation

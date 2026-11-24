@@ -38,6 +38,7 @@ class ElecStateLCAO : public ElecState
     using OwnerWavefunctions = std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>;
     void retain_k_owner_wfc(OwnerWavefunctions&& wfc);
     void clear_k_owner_wfc();
+    const OwnerWavefunctions& k_owner_wavefunctions() const { return owner_wfc_; }
     // Fill the requested sparse representation from the latest eigenvectors.
     // Return false when the latest solve used the legacy distributed Psi/DMK.
     // weights may be occupations or occupations times band energies.

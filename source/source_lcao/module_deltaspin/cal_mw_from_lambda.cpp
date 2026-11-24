@@ -93,7 +93,8 @@ template <>
 void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         int i_step,
         const ModuleBase::Vector3<double>* delta_lambda,
-        hsolver::HSolverLCAO<std::complex<double>>* lcao_solver)
+        hsolver::HSolverLCAO<std::complex<double>>* lcao_solver,
+        hsolver::LcaoRitzReference* reference)
 {
     ModuleBase::TITLE("spinconstrain::SpinConstrain", "cal_mw_from_lambda");
     ModuleBase::timer::start("spinconstrain::SpinConstrain", "cal_mw_from_lambda");
@@ -144,7 +145,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::cal_mw_from_lambda(
         const bool use_k_owner_dmr = this->state_.nspin_ == 4;
         const double omega = this->pelec->charge->rhopw->omega;
         lcao_solver->solve(hs, psi_t[0], this->pelec, *this->dm_, *this->pelec->charge,
-                           this->state_.nspin_, omega, use_k_owner_dmr, true);
+                           this->state_.nspin_, omega, use_k_owner_dmr, true, reference);
         // Note: although update_lambda() modifies lambda in-place above,
         // solve() unconditionally rebuilds DMR from the eigenvectors obtained
         // with the new lambda. Therefore cal_mi_lcao() never observes a stale

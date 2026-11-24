@@ -28,7 +28,8 @@
 template <>
 void spinconstrain::SpinConstrain<double>::cal_mw_from_lambda(int i_step,
         const ModuleBase::Vector3<double>* delta_lambda,
-        hsolver::HSolverLCAO<double>* lcao_solver)
+        hsolver::HSolverLCAO<double>* lcao_solver,
+        hsolver::LcaoRitzReference* reference)
 {
 }
 
@@ -43,7 +44,8 @@ template <>
 void spinconstrain::SpinConstrain<double>::run_lambda_loop(int outer_step,
         bool rerun,
         std::ostream& ofs_running,
-        hsolver::HSolverLCAO<double>* lcao_solver)
+        hsolver::HSolverLCAO<double>* lcao_solver,
+        bool use_lcao_ritz)
 {
 }
 

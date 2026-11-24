@@ -22,10 +22,7 @@
  *
  * @par Workflow
  * 1. ESolver calls init_deltaspin_lcao() at start of calculation
- * 2. Each SCF iteration:
- *    a. ESolver calls cal_mi_lcao_wrapper() to compute magnetic moments
- *    b. ESolver calls run_deltaspin_lambda_loop_lcao() to optimize lambda
- *    c. If skip_solve=true, ESolver skips the Hamiltonian solve (lambda loop already did it)
+ * 2. ESolver calls cal_mi_lcao_wrapper() to compute magnetic moments after updating the density matrix
  */
 
 namespace ModuleESolver
@@ -96,62 +93,6 @@ void cal_mi_lcao_wrapper(const int iter, const Input_para& inp)
 #endif
 }
 
-/**
- * @brief Wrapper: run the lambda optimization loop.
- *
- * @details Decision logic for when to run the lambda loop:
- *
- *   Case 1: NOT converged AND charge density is close enough (drho < sc_scf_thr)
- *   -> Run lambda loop, mark as converged, skip_solve = true
- *   Rationale: The charge density is stable enough to optimize lambda.
- *   The lambda loop does its own diagonalization, so skip the outer solve.
- *
- *   Case 2: Already converged
- *   -> Still run lambda loop (to refine for the current charge density)
- *   -> skip_solve = true
- *   Rationale: Even if converged, the charge density may have changed
- *   slightly, requiring lambda refinement.
- *
- *   Case 3: NOT converged AND charge density is NOT close enough (drho >= sc_scf_thr)
- *   -> Do nothing, skip_solve = false
- *   Rationale: The charge density is still changing significantly, so
- *   optimizing lambda would be premature. Wait for SCF to stabilize first.
- *
- * @param iter Current SCF iteration number
- * @param drho Charge density convergence criterion (max|drho|)
- * @param inp Input parameters
- * @return true if the ESolver should skip the Hamiltonian solve
- */
-template <typename TK>
-bool run_deltaspin_lambda_loop_lcao(const int iter,
-                                     const double drho,
-                                     const Input_para& inp,
-                                     std::ostream& ofs_running)
-{
-    bool skip_solve = false;
-
-    if (inp.sc_mag_switch)
-    {
-        spinconstrain::SpinConstrain<TK>& sc = spinconstrain::SpinConstrain<TK>::getScInstance();
-
-        if (!sc.mag_converged() && drho > 0 && drho < inp.sc_scf_thr)
-        {
-            /// Charge density is stable enough: optimize lambda for the first time
-            sc.run_lambda_loop(iter, true, ofs_running, nullptr);
-            sc.set_mag_converged(true);
-            skip_solve = true;
-        }
-        else if (sc.mag_converged())
-        {
-            /// Already converged: refine lambda for the current charge density
-            sc.run_lambda_loop(iter, true, ofs_running, nullptr);
-            skip_solve = true;
-        }
-    }
-
-    return skip_solve;
-}
-
 /// Template instantiations for both spin types
 template void init_deltaspin_lcao<double>(const UnitCell& ucell,
                                            const Input_para& inp,
@@ -172,14 +113,5 @@ template void init_deltaspin_lcao<std::complex<double>>(const UnitCell& ucell,
 
 template void cal_mi_lcao_wrapper<double>(const int iter, const Input_para& inp);
 template void cal_mi_lcao_wrapper<std::complex<double>>(const int iter, const Input_para& inp);
-
-template bool run_deltaspin_lambda_loop_lcao<double>(const int iter,
-                                                      const double drho,
-                                                      const Input_para& inp,
-                                                      std::ostream& ofs_running);
-template bool run_deltaspin_lambda_loop_lcao<std::complex<double>>(const int iter,
-                                                                      const double drho,
-                                                                      const Input_para& inp,
-                                                                      std::ostream& ofs_running);
 
 } // namespace ModuleESolver

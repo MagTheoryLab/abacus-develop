@@ -11,6 +11,10 @@
 #include <unordered_map>
 #include <complex>
 
+namespace spinconstrain
+{
+struct RitzProjectorGeometry;
+}
 namespace hamilt
 {
 
@@ -104,7 +108,18 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                     const int nbands_global,
                     std::vector<std::vector<std::complex<double>>>& PI_sub) const;
 
+#if defined(__CUDA) && defined(__MPI)
+    std::vector<std::complex<double>> fold_ritz_projectors(
+        const ModuleBase::Vector3<double>& k, int spatial, int projectors) const;
+    spinconstrain::RitzProjectorGeometry ritz_geometry() const;
+#endif
+
   private:
+    bool needsHRUpdate() const override
+    {
+        return !this->hr_done || !this->sc_hr_done || this->update_lambda_[this->current_spin];
+    }
+
     const UnitCell* ucell = nullptr;
 
     const Grid_Driver* gridD = nullptr;

@@ -10,6 +10,11 @@
 
 #include <algorithm>
 
+#if defined(__CUDA) && defined(__MPI)
+#include "source_base/constants.h"
+#include "source_lcao/module_deltaspin/lcao_ritz_gpu.h"
+#endif
+
 template <typename TK, typename TR>
 hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::DeltaSpin(HS_Matrix_K<TK>* hsk_in,
                                                            const std::vector<ModuleBase::Vector3<double>>& kvec_d_in,
@@ -67,14 +72,14 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::contributeHR()
     // 2. HR exists but lambda has changed (hr_done=true, sc_hr_done=false or update_lambda_=true):
     //    compute incremental delta = lambda - lambda_save and add to existing HR
     // 3. HR exists and lambda has not changed: do nothing
+    if (!this->needsHRUpdate())
+    {
+        return;
+    }
     if(!this->hr_done)
     {
         // HR is being rebuilt from scratch, so the old DS contribution is gone
         this->lambda_save.assign(this->ucell->nat * 3, 0.0);
-    }
-    else if(this->sc_hr_done && !this->update_lambda_[this->current_spin])
-    {
-        return;
     }
 
     // calculate Hpre^I = \sum_{lm}<phi_mu|alpha^I_{lm}><alpha^I_{lm}|phi_{nu,R}>
@@ -510,6 +515,122 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, std::complex<d
     moment[1] += tmp_moment[1];
     moment[2] += tmp_moment[2];
 }
+
+#if defined(__CUDA) && defined(__MPI)
+template <typename TK, typename TR>
+std::vector<std::complex<double>> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::fold_ritz_projectors(
+    const ModuleBase::Vector3<double>& k, int spatial, int projectors) const
+{
+    const int size = spatial * projectors;
+    std::vector<std::complex<double>> folded(size);
+    int offset = 0;
+    const int* orbital_start = this->ucell->get_iat2iwt();
+    for (int atom = 0; atom < this->ucell->nat; ++atom)
+    {
+        for (const auto& neighbor : this->B_I_data[atom])
+        {
+            const auto& r = neighbor.R_index;
+            const double angle = ModuleBase::TWO_PI * (k.x * r.x + k.y * r.y + k.z * r.z);
+            const std::complex<double> phase(std::cos(angle), std::sin(angle));
+            for (const auto& orbital : neighbor.nlm)
+            {
+                const int iw = orbital_start[neighbor.iat_adj] + orbital.first;
+                // The row/column intersection contributes each overlap once.
+                if (this->paraV->global2local_row(iw) >= 0 && this->paraV->global2local_col(iw) >= 0)
+                {
+                    const int first = iw / 2 * projectors + offset;
+                    for (int ip = 0; ip < orbital.second.size(); ++ip)
+                    {
+                        folded[first + ip] += phase * orbital.second[ip];
+                    }
+                }
+            }
+        }
+        offset += this->B_I_nproj[atom];
+    }
+    Parallel_Reduce::reduce_all(folded.data(), size);
+    return folded;
+}
+
+template <typename TK, typename TR>
+spinconstrain::RitzProjectorGeometry hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::ritz_geometry() const
+{
+    spinconstrain::RitzProjectorGeometry geometry;
+    geometry.projector_counts = this->B_I_nproj;
+    const int* orbital_start = this->ucell->get_iat2iwt();
+    std::vector<int> orbitals(this->ucell->nat);
+    for (int atom = 0; atom < orbitals.size(); ++atom)
+    {
+        const int it = this->ucell->iat2it[atom];
+        orbitals[atom] = this->ucell->atoms[it].nw;
+    }
+
+    // B(k)^* B(k) includes pairs outside the real-space H(R) cutoff.
+    // Preserve the original pre_hr definition by subtracting those pairs.
+    std::vector<int> kept;
+    for (int atom = 0; atom < this->ucell->nat; ++atom)
+    {
+        const auto& neighbors = this->B_I_data[atom];
+        const int projectors = this->B_I_nproj[atom];
+        std::vector<int> offsets;
+        offsets.reserve(neighbors.size());
+        for (const auto& near : neighbors)
+        {
+            const int begin = geometry.factors.size();
+            offsets.push_back(begin);
+            geometry.factors.resize(begin + orbitals[near.iat_adj] * projectors, 0.0);
+            for (const auto& orbital : near.nlm)
+            {
+                const int iw = orbital_start[near.iat_adj] + orbital.first;
+                if (this->paraV->global2local_row(iw) >= 0 && this->paraV->global2local_col(iw) >= 0)
+                {
+                    const int offset = begin + orbital.first / 2 * projectors;
+                    std::copy(orbital.second.begin(), orbital.second.end(), geometry.factors.begin() + offset);
+                }
+            }
+        }
+        for (int i = 0; i < neighbors.size(); ++i)
+        {
+            const auto& left = neighbors[i];
+            const int row = orbital_start[left.iat_adj] / 2;
+            for (int j = 0; j < neighbors.size(); ++j)
+            {
+                const auto& right = neighbors[j];
+                const int col = orbital_start[right.iat_adj] / 2;
+                const auto r = right.R_index - left.R_index;
+                kept.push_back(this->pre_hr[atom]->find_matrix(left.iat_adj, right.iat_adj, r) != nullptr);
+                geometry.omitted.push_back({atom, row, col, orbitals[left.iat_adj], orbitals[right.iat_adj],
+                                            projectors, offsets[i], offsets[j], r});
+            }
+        }
+    }
+    const int pair_count = kept.size();
+    if (pair_count == 0)
+    {
+        return geometry;
+    }
+    Parallel_Reduce::reduce_all(kept.data(), pair_count);
+    int omitted = 0;
+    for (int i = 0; i < pair_count; ++i)
+    {
+        if (kept[i] == 0)
+        {
+            geometry.omitted[omitted++] = geometry.omitted[i];
+        }
+    }
+    geometry.omitted.resize(omitted);
+    if (omitted == 0)
+    {
+        geometry.factors.clear();
+    }
+    else
+    {
+        const int count = geometry.factors.size();
+        Parallel_Reduce::reduce_all(geometry.factors.data(), count);
+    }
+    return geometry;
+}
+#endif
 
 // cal_PI_sub: compute P_I_sub(k) = D_I(k)^dag D_I(k) for all constrained atoms
 // D_I(k) = B_I(k) * C_k, where B_I(k)[lm, mu] = sum_R <alpha_I_lm|phi_{mu,R}> exp(ik·R)

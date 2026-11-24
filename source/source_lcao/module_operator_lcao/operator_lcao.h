@@ -9,6 +9,13 @@
 
 namespace hamilt {
 
+enum class LcaoFolding
+{
+    Host,
+    Device,
+    DeviceWithHostHR
+};
+
 template <typename TK, typename TR>
 class OperatorLCAO : public Operator<TK> {
   public:
@@ -38,7 +45,7 @@ class OperatorLCAO : public Operator<TK> {
 
     /// Shared real-space construction; optionally defer ordinary H/S folding.
     /// Returns whether H(R) may have changed, including incremental constraints.
-    bool init(int ik_in, bool fold_k);
+    bool init(int ik_in, LcaoFolding folding);
 
     void refresh_h();
 
@@ -137,6 +144,8 @@ class OperatorLCAO : public Operator<TK> {
     const std::vector<ModuleBase::Vector3<double>>& kvec_d;
 
   protected:
+    virtual bool needsHRUpdate() const { return !this->hr_done; }
+
     TD_info* td_info_ = nullptr;
 
     bool new_e_iteration = true;

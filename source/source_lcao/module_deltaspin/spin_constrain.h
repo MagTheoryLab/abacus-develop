@@ -68,6 +68,7 @@
 
 namespace hsolver
 {
+struct LcaoRitzReference;
 template <typename TK>
 class HSolverLCAO;
 }
@@ -205,7 +206,8 @@ public:
    */
   void cal_mw_from_lambda(int i_step,
           const ModuleBase::Vector3<double>* delta_lambda,
-          hsolver::HSolverLCAO<TK>* lcao_solver);
+          hsolver::HSolverLCAO<TK>* lcao_solver,
+          hsolver::LcaoRitzReference* reference);
 
   /**
    * @brief Calculate the spin constraint energy contribution: E_scon = -sum(lambda_i . Mi_i).
@@ -237,7 +239,8 @@ public:
   void run_lambda_loop(int outer_step,
           bool rerun,
           std::ostream& ofs_running,
-          hsolver::HSolverLCAO<TK>* lcao_solver);
+          hsolver::HSolverLCAO<TK>* lcao_solver,
+          bool use_lcao_ritz);
 
   /// @brief RMS error of the most recent lambda optimization loop (-1.0 if none has run).
   double get_last_rms_error() const { return last_rms_error_; }

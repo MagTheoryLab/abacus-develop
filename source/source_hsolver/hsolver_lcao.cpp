@@ -125,6 +125,25 @@ void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
                                    const bool use_k_owner_dmr,
                                    const bool skip_charge)
 {
+    this->solve(hs, psi, pes, dm, chr, nspin, omega, use_k_owner_dmr, skip_charge, nullptr);
+}
+
+template <typename TK>
+void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
+                           psi::Psi<TK>& psi,
+                           elecstate::ElecState* pes,
+                           module_dm::DensityMatrix<TK, double>& dm,
+                           Charge& chr,
+                           int nspin,
+                           double omega,
+                           bool use_k_owner_dmr,
+                           bool skip_charge,
+                           LcaoRitzReference* reference)
+{
+    if (reference != nullptr)
+    {
+        reference->energy_by_k.clear();
+    }
     ModuleBase::TITLE("HSolverLCAO", "solve");
     ModuleBase::timer::start("HSolverLCAO", "solve");
 
@@ -144,7 +163,8 @@ void HSolverLCAO<TK>::solve(HSMatrix<TK>& hs,
         if (this->method == "cusolver")
         {
             used_k_owner_dmr = use_k_owner_dmr;
-            this->parakSolve_cusolver(hs, psi, pes, used_k_owner_dmr ? &owner_wfc : nullptr);
+            auto* owner_output = used_k_owner_dmr ? &owner_wfc : nullptr;
+            this->parakSolve_cusolver(hs, psi, pes, owner_output, reference);
         }
         else
     #endif
@@ -423,7 +443,8 @@ template <typename T>
 void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
                                             psi::Psi<T>& psi,
                                             elecstate::ElecState* pes,
-                                            std::vector<std::unique_ptr<psi::Psi<T, base_device::DEVICE_GPU>>>* owner_wfc)
+                                            std::vector<std::unique_ptr<psi::Psi<T, base_device::DEVICE_GPU>>>* owner_wfc,
+                                            LcaoRitzReference* reference)
 {
     ModuleBase::timer::start("HSolverLCAO", "parakSolve");
     // GPU device is already bound by DeviceContext::init() in read_input.cpp
@@ -517,6 +538,12 @@ void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
     }
     KOwnerMatrixGpu* device_matrices
         = owner_wfc != nullptr ? this->solve_context_->device_matrices.get() : nullptr;
+    const bool capture_reference = device_matrices != nullptr && reference != nullptr
+                                   && reference->bands >= nbands && reference->bands <= nrow;
+    if (capture_reference)
+    {
+        reference->energy_by_k.resize(nks);
+    }
     if (is_active && !this->solve_context_->cusolver)
     {
         this->solve_context_->cusolver.reset(new DiagoCusolver<T>(this->nlocal, this->nbands));
@@ -596,14 +623,23 @@ void HSolverLCAO<T>::parakSolve_cusolver(HSMatrix<T>& hs,
             if (owner_wfc != nullptr)
             {
                 psi_local_device.reset(new psi::Psi<T, base_device::DEVICE_GPU>());
-                psi_local_device->resize(1, nbands, nrow);
+                const int output_bands = capture_reference ? reference->bands : nbands;
+                psi_local_device->resize(1, output_bands, nrow);
                 if (device_matrices)
                 {
+                    double* reference_energy = nullptr;
+                    if (capture_reference)
+                    {
+                        auto& local_energy = reference->energy_by_k[kpt_assigned];
+                        local_energy.resize(output_bands);
+                        reference_energy = local_energy.data();
+                    }
                     this->solve_context_->cusolver->diag_device_inplace(
                         reinterpret_cast<T*>(device_matrices->h_device()),
                         reinterpret_cast<T*>(device_matrices->s_device()),
                         *psi_local_device,
-                        &(pes->ekb(kpt_assigned, 0)));
+                        &(pes->ekb(kpt_assigned, 0)),
+                        reference_energy);
                 }
                 else
                 {

@@ -82,12 +82,14 @@ void OperatorLCAO<TK, TR>::set_hr_done(bool hr_done_in) {
 
 template <typename TK, typename TR>
 void OperatorLCAO<TK, TR>::init(const int ik_in) {
-    this->init(ik_in, true);
+    this->init(ik_in, LcaoFolding::Host);
 }
 
 template <typename TK, typename TR>
-bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
-    bool hr_changed = !this->hr_done || this->cal_type == calculation_type::lcao_sc_lambda;
+bool OperatorLCAO<TK, TR>::init(const int ik_in, const LcaoFolding folding) {
+    const bool fold_k = folding == LcaoFolding::Host;
+    const bool device_hr = folding == LcaoFolding::Device;
+    bool hr_changed = this->needsHRUpdate();
     ModuleBase::TITLE("OperatorLCAO", "init");
     ModuleBase::timer::start("OperatorLCAO", "init");
     if (this->is_first_node) {
@@ -160,8 +162,8 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
                     // update HR first
                     // in cal_type=lcao_gint, HR should be updated by every
                     // sub-node.
-                    if (fold_k) last->contributeHR();
-                    else last->contributeHRDevice();
+                    if (device_hr) last->contributeHRDevice();
+                    else last->contributeHR();
 
                     // update HK next
                     // in cal_type=lcao_gint, HK will update in the last node with
@@ -192,8 +194,8 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
             //in cal_type=lcao_dftu, HK only need to update from one node
             if(!this->hr_done)
             {
-                if (fold_k) this->contributeHR();
-                else this->contributeHRDevice();
+                if (device_hr) this->contributeHRDevice();
+                else this->contributeHR();
             }
             break;
         }
@@ -249,7 +251,7 @@ bool OperatorLCAO<TK, TR>::init(const int ik_in, const bool fold_k) {
         }
         // call init() function of next node
         ModuleBase::timer::end("OperatorLCAO", "init");
-        const bool next_changed = dynamic_cast<OperatorLCAO<TK, TR>*>(this->next_op)->init(ik_in, fold_k);
+        const bool next_changed = dynamic_cast<OperatorLCAO<TK, TR>*>(this->next_op)->init(ik_in, folding);
         hr_changed = hr_changed || next_changed;
         ModuleBase::timer::start("OperatorLCAO", "init");
     } else { // it is the last node, update HK with the current total HR

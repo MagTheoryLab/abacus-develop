@@ -48,6 +48,7 @@ bool HamiltLCAO<std::complex<double>, std::complex<double>>::updateHk_device(
 {
     // These operators also contribute directly in k space. Keep their existing
     // folding/gauge workflow intact, before mutating any real-space state.
+    bool has_delta_spin = false;
     for (auto* op = this->ops; op != nullptr; op = op->next_op)
     {
         if (op->get_cal_type() == calculation_type::lcao_deepks
@@ -64,22 +65,34 @@ bool HamiltLCAO<std::complex<double>, std::complex<double>>::updateHk_device(
         {
             return false;
         }
-        if (op->get_cal_type() == calculation_type::lcao_sc_lambda
-            || op->get_cal_type() == calculation_type::lcao_exx)
+        if (op->get_cal_type() == calculation_type::lcao_exx)
         {
             return false;
         }
+        has_delta_spin = has_delta_spin || op->get_cal_type() == calculation_type::lcao_sc_lambda;
     }
-    this->updateHk_impl(ik, false);
+    // DeltaSpin updates the complete host H(R) in place, including Veff.
+    const LcaoFolding folding = has_delta_spin ? LcaoFolding::DeviceWithHostHR : LcaoFolding::Device;
+    const bool hr_changed = this->updateHk_impl(ik, folding);
     if (!this->h_fold_)
     {
         this->h_fold_.reset(new FoldingHrGpu(*this->hR, this->kv->kvec_d));
+        this->h_fold_->upload(*this->hR);
+    }
+    else if (has_delta_spin && hr_changed)
+    {
         this->h_fold_->upload(*this->hR);
     }
     if (!this->s_fold_)
     {
         this->s_fold_.reset(new FoldingHrGpu(*this->sR, this->kv->kvec_d));
         this->s_fold_->upload(*this->sR);
+    }
+    if (has_delta_spin)
+    {
+        h = this->h_fold_->fold(ik);
+        s = this->s_fold_->fold(ik);
+        return true;
     }
     const std::complex<double>* addends[2] = {nullptr, nullptr};
     int addend_count = 0;
@@ -281,11 +294,17 @@ void HamiltLCAO<TK, TR>::matrix(ModuleBase::MatrixBlock<TK>& hk_in, ModuleBase::
 template <typename TK, typename TR>
 void HamiltLCAO<TK, TR>::updateHk(const int ik)
 {
-    this->updateHk_impl(ik, true);
+    const bool hr_changed = this->updateHk_impl(ik, LcaoFolding::Host);
+#ifdef __CUDA
+    if (hr_changed)
+    {
+        this->h_fold_.reset();
+    }
+#endif
 }
 
 template <typename TK, typename TR>
-void HamiltLCAO<TK, TR>::updateHk_impl(const int ik, const bool fold_k)
+bool HamiltLCAO<TK, TR>::updateHk_impl(const int ik, const LcaoFolding folding)
 {
     ModuleBase::TITLE("HamiltLCAO", "updateHk");
     ModuleBase::timer::start("HamiltLCAO", "updateHk");
@@ -307,8 +326,9 @@ void HamiltLCAO<TK, TR>::updateHk_impl(const int ik, const bool fold_k)
         this->current_spin = this->kv->isk[ik];
         this->getOperatorLCAO()->set_current_spin(this->kv->isk[ik]);
     }
-    this->getOperatorLCAO()->init(ik, fold_k);
+    const bool hr_changed = this->getOperatorLCAO()->init(ik, folding);
     ModuleBase::timer::end("HamiltLCAO", "updateHk");
+    return hr_changed;
 }
 
 template <typename TK, typename TR>
@@ -331,6 +351,9 @@ void HamiltLCAO<TK, TR>::refresh(bool yes)
         }
     }
     else {
+#ifdef __CUDA
+        this->h_fold_.reset();
+#endif
         this->getOperatorLCAO()->set_hr_done(true);
         this->refresh_times = 0;
         if (this->nspin == 2)

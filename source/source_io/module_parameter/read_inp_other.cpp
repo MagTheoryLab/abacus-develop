@@ -187,19 +187,32 @@ When false (default), both the direction and magnitude of the magnetic moment ar
         item.type = "String";
         item.description = R"(Lambda update strategy for spin-constrained DFT:
 * bfgs: BFGS quasi-Newton method
+* lcao_ritz: Ritz subspace trials with a full accepted-state refresh for noncollinear CUDA/MPI LCAO cuSolver runs with nsc > 2.
+  Other spin constraints and solver configurations use the full-space lambda loop.
 * linear_response: linear response (Scheme B)
 * augmented_lagrangian: augmented Lagrangian (Scheme C)
 * hybrid_delayed: hybrid delayed update (Scheme D)
 * linear_scan: linear sweep of lambda for testing magnetic moment response)";
-        item.default_value = "bfgs";
+        item.default_value = "lcao_ritz for CUDA/MPI noncollinear LCAO cuSolver SCF with compatible constraints; bfgs otherwise";
         item.unit = "";
         item.set_availability("sc_mag_switch==true");
         read_sync_string(input.sc_lambda_strategy);
+#if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
+        item.reset_value = [](const Input_Item& item, Parameter& para) {
+            const auto& input = para.inp;
+            if (!item.is_read() && input.sc_mag_switch && input.calculation == "scf"
+                && input.basis_type == "lcao" && input.device == "gpu" && input.ks_solver == "cusolver"
+                && input.nspin == 4 && input.nsc > 2 && !input.sc_direction_only && !input.decay_grad_switch)
+            {
+                para.input.sc_lambda_strategy = "lcao_ritz";
+            }
+        };
+#endif
         item.check_value = [](const Input_Item& item, const Parameter& para) {
-            const std::vector<std::string> valid = {"bfgs", "bfgs2", "linear_response", "augmented_lagrangian", "hybrid_delayed", "linear_scan"};
+            const std::vector<std::string> valid = {"bfgs", "bfgs2", "lcao_ritz", "linear_response", "augmented_lagrangian", "hybrid_delayed", "linear_scan"};
             if (std::find(valid.begin(), valid.end(), para.input.sc_lambda_strategy) == valid.end())
             {
-                ModuleBase::WARNING_QUIT("ReadInput", "sc_lambda_strategy must be bfgs, bfgs2, linear_response, augmented_lagrangian, hybrid_delayed, or linear_scan");
+                ModuleBase::WARNING_QUIT("ReadInput", "sc_lambda_strategy must be bfgs, bfgs2, lcao_ritz, linear_response, augmented_lagrangian, hybrid_delayed, or linear_scan");
             }
         };
         this->add_item(item);

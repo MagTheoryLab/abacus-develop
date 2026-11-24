@@ -29,9 +29,9 @@ TEST_F(SpinConstrainTest, TemplatHelpers)
 {
     // this is a trivial test as the double version is not used
     std::vector<std::complex<double>> Sloc2;
-    EXPECT_NO_THROW(sc.cal_mw_from_lambda(0, nullptr, nullptr));
+    EXPECT_NO_THROW(sc.cal_mw_from_lambda(0, nullptr, nullptr, nullptr));
     EXPECT_NO_THROW(sc.cal_mi_lcao(0,false));
-    EXPECT_NO_THROW(sc.run_lambda_loop(0, true, std::cout, nullptr));
+    EXPECT_NO_THROW(sc.run_lambda_loop(0, true, std::cout, nullptr, false));
     EXPECT_FALSE(spinconstrain::check_rms_stop(sc, 0, 0, 0.0, 0.0, 0.0, std::cout));
     EXPECT_NO_THROW(spinconstrain::print_termination(sc, std::cout));
     EXPECT_NO_THROW(spinconstrain::print_header(sc, std::cout));

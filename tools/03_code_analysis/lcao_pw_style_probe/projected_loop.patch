@@ -1,0 +1,476 @@
+--- a/source/source_estate/elecstate_lcao.h
++++ b/source/source_estate/elecstate_lcao.h
+@@ -38,6 +38,7 @@
+     using OwnerWavefunctions = std::vector<std::unique_ptr<psi::Psi<TK, base_device::DEVICE_GPU>>>;
+     void retain_k_owner_wfc(OwnerWavefunctions&& wfc);
+     void clear_k_owner_wfc();
++    const OwnerWavefunctions& owner_wavefunctions() const { return owner_wfc_; }
+     // Fill the requested sparse representation from the latest eigenvectors.
+     // Return false when the latest solve used the legacy distributed Psi/DMK.
+     // weights may be occupations or occupations times band energies.
+--- a/source/source_lcao/module_operator_lcao/dspin_lcao.h
++++ b/source/source_lcao/module_operator_lcao/dspin_lcao.h
+@@ -104,4 +104,9 @@
+                     const int nbands_global,
+                     std::vector<std::vector<std::complex<double>>>& PI_sub) const;
+
++    const std::vector<int>& projector_counts() const { return this->B_I_nproj; }
++    std::vector<std::complex<double>> fold_projectors(
++        const ModuleBase::Vector3<double>& kvec, int spatial, int projectors) const;
++    std::vector<int> omitted_projector_pairs() const;
++
+   private:
+--- a/source/source_lcao/module_operator_lcao/dspin_lcao.cpp
++++ b/source/source_lcao/module_operator_lcao/dspin_lcao.cpp
+@@ -1,5 +1,6 @@
+ #include "dspin_lcao.h"
+
++#include "source_base/constants.h"
+ #include "source_base/memory_recorder.h"
+ #include "source_base/parallel_reduce.h"
+ #include "source_base/timer.h"
+@@ -9,6 +10,8 @@
+ #include "source_lcao/module_deltaspin/spin_constrain.h"
+
+ #include <algorithm>
++#include <cstring>
++#include <numeric>
+
+ template <typename TK, typename TR>
+ hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::DeltaSpin(HS_Matrix_K<TK>* hsk_in,
+@@ -509,6 +512,111 @@
+     moment[0] += tmp_moment[0];
+     moment[1] += tmp_moment[1];
+     moment[2] += tmp_moment[2];
++}
++
++template <typename TK, typename TR>
++std::vector<std::complex<double>> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::fold_projectors(
++    const ModuleBase::Vector3<double>& kvec, int spatial, int projectors) const
++{
++    const int size = spatial * projectors;
++    std::vector<std::complex<double>> folded(size);
++    int offset = 0;
++    const int* orbital_start = this->ucell->get_iat2iwt();
++    for (int atom = 0; atom < this->ucell->nat; ++atom)
++    {
++        for (const auto& neighbor : this->B_I_data[atom])
++        {
++            const auto& r = neighbor.R_index;
++            const double angle = ModuleBase::TWO_PI * (kvec.x * r.x + kvec.y * r.y + kvec.z * r.z);
++            const std::complex<double> phase(std::cos(angle), std::sin(angle));
++            for (const auto& orbital : neighbor.nlm)
++            {
++                const int iw = orbital_start[neighbor.iat_adj] + orbital.first;
++                if (this->paraV->global2local_row(iw) >= 0 && this->paraV->global2local_col(iw) >= 0)
++                {
++                    const int first = iw / 2 * projectors + offset;
++                    for (int p = 0; p < orbital.second.size(); ++p)
++                    {
++                        folded[first + p] += phase * orbital.second[p];
++                    }
++                }
++            }
++        }
++        offset += this->B_I_nproj[atom];
++    }
++    Parallel_Reduce::reduce_all(folded.data(), size);
++    return folded;
++}
++
++template <typename TK, typename TR>
++std::vector<int> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::omitted_projector_pairs() const
++{
++    static_assert(sizeof(double) == 2 * sizeof(int), "Probe packs real matrix values into two integers");
++    constexpr int orbitals = 27;
++    constexpr int projectors = 16;
++    const int* orbital_start = this->ucell->get_iat2iwt();
++    std::vector<double> coefficients;
++    std::vector<int> neighbors_before(this->ucell->nat + 1);
++    std::vector<int> kept;
++    for (int atom = 0; atom < this->ucell->nat; ++atom)
++    {
++        const auto& neighbors = this->B_I_data[atom];
++        neighbors_before[atom + 1] = neighbors_before[atom] + neighbors.size();
++        for (const auto& near : neighbors)
++        {
++            const size_t start = coefficients.size();
++            coefficients.resize(start + orbitals * projectors, 0.0);
++            for (const auto& orbital : near.nlm)
++            {
++                const int iw = orbital_start[near.iat_adj] + orbital.first;
++                if (this->paraV->global2local_row(iw) >= 0 && this->paraV->global2local_col(iw) >= 0)
++                {
++                    const size_t offset = start + orbital.first / 2 * projectors;
++                    std::copy(orbital.second.begin(), orbital.second.end(), coefficients.begin() + offset);
++                }
++            }
++        }
++        for (const auto& left : neighbors)
++        {
++            for (const auto& right : neighbors)
++            {
++                const auto r = right.R_index - left.R_index;
++                kept.push_back(this->pre_hr[atom]->find_matrix(left.iat_adj, right.iat_adj, r) != nullptr);
++            }
++        }
++    }
++    const int pair_count = kept.size();
++    const int coefficient_count = coefficients.size();
++    Parallel_Reduce::reduce_all(kept.data(), pair_count);
++    Parallel_Reduce::reduce_all(coefficients.data(), coefficient_count);
++    std::vector<int> result;
++    result.push_back(coefficient_count);
++    result.push_back(0);
++    int pair = 0;
++    for (int atom = 0; atom < this->ucell->nat; ++atom)
++    {
++        const auto& neighbors = this->B_I_data[atom];
++        for (int l = 0; l < neighbors.size(); ++l)
++        {
++            const auto& left = neighbors[l];
++            for (int j = 0; j < neighbors.size(); ++j)
++            {
++                const auto& right = neighbors[j];
++                if (kept[pair++] != 0)
++                {
++                    continue;
++                }
++                const auto r = right.R_index - left.R_index;
++                result.insert(result.end(), {atom, orbital_start[left.iat_adj] / 2, orbital_start[right.iat_adj] / 2,
++                                             neighbors_before[atom] + l, neighbors_before[atom] + j, r.x, r.y, r.z});
++                ++result[1];
++            }
++        }
++    }
++    const size_t start = result.size();
++    result.resize(start + 2 * coefficients.size());
++    std::memcpy(result.data() + start, coefficients.data(), coefficients.size() * sizeof(double));
++    return result;
+ }
+
+ // cal_PI_sub: compute P_I_sub(k) = D_I(k)^dag D_I(k) for all constrained atoms
+--- a/source/source_lcao/module_deltaspin/cal_mw_from_lambda.cpp
++++ b/source/source_lcao/module_deltaspin/cal_mw_from_lambda.cpp
+@@ -15,11 +15,148 @@
+ #include "spin_constrain.h"
+
+ #include <memory>
++#include <chrono>
++#include <numeric>
++
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++#include "source_base/parallel_common.h"
++#include <dlfcn.h>
++#endif
+
+ #ifdef __LCAO
+ #include "source_estate/elecstate_lcao.h"
+ #include "source_estate/module_dm/dm_from_psi.h"
+ #include "source_lcao/module_operator_lcao/dspin_lcao.h"
++#endif
++
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++template <>
++bool spinconstrain::SpinConstrain<std::complex<double>>::try_lazy_projector_trial(
++    const std::vector<ModuleBase::Vector3<double>>& reference_lambda,
++    bool use_trial, std::vector<ModuleBase::Vector3<double>>& preview, std::ostream& log)
++{
++    using Complex = std::complex<double>;
++    using Dspin = hamilt::DeltaSpin<hamilt::OperatorLCAO<Complex, Complex>>;
++    using Prepare = void (*)(int, const Complex*, const int*, const double*, const int*, int);
++    using Solve = void (*)(int, const double*, double*, double*);
++    using Moments = void (*)(int, const double*, int, double*);
++    static const auto prepare = reinterpret_cast<Prepare>(dlsym(RTLD_DEFAULT, "abacus_lazy_prepare"));
++    static const auto solve = reinterpret_cast<Solve>(dlsym(RTLD_DEFAULT, "abacus_lazy_solve"));
++    static const auto eval_moments = reinterpret_cast<Moments>(dlsym(RTLD_DEFAULT, "abacus_lazy_moments"));
++    if (!prepare || !solve || !eval_moments || PARAM.inp.calculation != "scf"
++        || PARAM.inp.basis_type != "lcao" || this->state_.nspin_ != 4 || PARAM.inp.ks_solver != "cusolver"
++        || PARAM.globalv.nlocal != 3456 || this->pelec->ekb.nc != 1152 || this->pelec->ekb.nr != 8)
++    {
++        return false;
++    }
++    const auto* estate = static_cast<const elecstate::ElecStateLCAO<Complex>*>(this->pelec);
++    const auto& waves = estate->owner_wavefunctions();
++    if (waves.empty())
++    {
++        return false;
++    }
++    const auto begin = std::chrono::steady_clock::now();
++    const auto* dspin = static_cast<const Dspin*>(this->p_operator);
++    const auto& counts = dspin->projector_counts();
++    const int nat = counts.size();
++    const int projectors = std::accumulate(counts.begin(), counts.end(), 0);
++    if (nat != 64 || projectors != 64 * 16)
++    {
++        return false;
++    }
++    const int nbands = this->pelec->ekb.nc;
++    const int nks = waves.size();
++    const int spatial = PARAM.globalv.nlocal / 2;
++    static bool ready = false;
++    static bool valid = true;
++    const auto moments = [&](const ModuleBase::matrix& weights, bool reference) {
++        std::vector<double> result(3 * nat);
++        for (int ik = 0; ik < nks; ++ik)
++        {
++            if (waves[ik] != nullptr)
++            {
++                eval_moments(ik, &weights(ik, 0), reference, result.data());
++            }
++        }
++        const int components = result.size();
++        Parallel_Reduce::reduce_all(result.data(), components);
++        return result;
++    };
++    if (!ready)
++    {
++        ready = true;
++        const auto omissions = dspin->omitted_projector_pairs();
++        const int total = omissions.size();
++        log << "LAZY_OMISSIONS blocks " << omissions[1] << " geometry_records " << total << '\n';
++        for (int ik = 0; ik < nks; ++ik)
++        {
++            const auto& kvec = this->pelec->klist->kvec_d[ik];
++            const auto b = dspin->fold_projectors(kvec, spatial, projectors);
++            if (waves[ik] != nullptr)
++            {
++                const double k[3] = {kvec.x, kvec.y, kvec.z};
++                prepare(ik, b.data(), counts.data(), k, omissions.data(), total);
++            }
++        }
++        const auto reference = moments(this->pelec->wg, true);
++        double error = 0.0;
++        for (int i = 0; i < nat; ++i)
++        {
++            const ModuleBase::Vector3<double> reconstructed(reference[i * 3], reference[i * 3 + 1], reference[i * 3 + 2]);
++            const auto difference = reconstructed - this->state_.get_mi()[i];
++            error = std::max(error, difference.norm());
++        }
++        valid = error <= 1e-7;
++        log << "LAZY_PROJECTOR_GATE error_uB " << error
++            << " setup_and_audit_s " << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count()
++            << " passed " << valid << '\n';
++    }
++    if (!valid)
++    {
++        return false;
++    }
++    const auto trial_begin = std::chrono::steady_clock::now();
++    std::vector<double> delta(3 * nat);
++    for (int i = 0; i < nat; ++i)
++    {
++        const auto x = this->state_.get_sc_lambda()[i] - reference_lambda[i];
++        delta[3 * i] = x.x;
++        delta[3 * i + 1] = x.y;
++        delta[3 * i + 2] = x.z;
++    }
++    double times[4] = {};
++    ModuleBase::matrix eigen(nks, nbands);
++    for (int ik = 0; ik < nks; ++ik)
++    {
++        if (waves[ik] != nullptr)
++        {
++            solve(ik, delta.data(), &eigen(ik, 0), times);
++        }
++    }
++    const int eigen_count = nks * nbands;
++    Parallel_Reduce::reduce_all(eigen.c, eigen_count);
++    ModuleBase::matrix weights(nks, nbands);
++    auto fermi = this->pelec->eferm;
++    auto energy = this->pelec->f_en;
++    auto nelec = this->pelec->nelec_spin;
++    elecstate::calculate_weights(eigen, weights, this->pelec->klist, fermi, energy, nelec, nbands, false);
++    const auto raw = moments(weights, false);
++    Parallel_Reduce::reduce_max(times, 4);
++    preview.resize(nat);
++    for (int i = 0; i < nat; ++i)
++    {
++        preview[i] = ModuleBase::Vector3<double>(raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]);
++    }
++    log << "LAZY_PROJECTOR_TRIAL applied " << use_trial
++        << " eval_s " << std::chrono::duration<double>(std::chrono::steady_clock::now() - trial_begin).count()
++        << " projector_s " << times[0] << " mask_s " << times[1]
++        << " small_solve_s " << times[2] << " rotate_projectors_s " << times[3] << '\n';
++    if (use_trial)
++    {
++        this->state_.get_mi() = preview;
++    }
++    return use_trial;
++}
+ #endif
+
+ /**
+--- a/source/source_lcao/module_deltaspin/spin_constrain.h
++++ b/source/source_lcao/module_deltaspin/spin_constrain.h
+@@ -206,6 +206,8 @@
+   void cal_mw_from_lambda(int i_step,
+           const ModuleBase::Vector3<double>* delta_lambda,
+           hsolver::HSolverLCAO<TK>* lcao_solver);
++  bool try_lazy_projector_trial(const std::vector<ModuleBase::Vector3<double>>& reference_lambda,
++                                bool use_trial, std::vector<ModuleBase::Vector3<double>>& preview, std::ostream& log);
+
+   /**
+    * @brief Calculate the spin constraint energy contribution: E_scon = -sum(lambda_i . Mi_i).
+--- a/source/source_lcao/module_deltaspin/lambda_loop.cpp
++++ b/source/source_lcao/module_deltaspin/lambda_loop.cpp
+@@ -2,6 +2,9 @@
+ #include <iostream>
+ #include <cmath>
+ #include <chrono>
++#include <cstdlib>
++#include <cstring>
++#include <algorithm>
+
+ #include "basic_funcs.h"
+ #include "deltaspin_pw_mi.h"
+@@ -105,6 +108,29 @@
+ #endif
+
+     double inner_loop_duration = 0.0;
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++    const char* lazy_probe = std::getenv("ABACUS_LAZY_PROJECTOR_PROBE");
++    const auto& decay_grad = this->state_.get_decay_grad();
++    const bool gradient_stop = std::any_of(decay_grad.begin(), decay_grad.end(), [](double v) { return v > 0.0; });
++    bool projected_inner = lazy_probe && std::strcmp(lazy_probe, "pw-style") == 0 && lcao_solver
++                           && this->state_.get_nsc() > 2 && !this->state_.direction_only_ && !gradient_stop;
++    std::vector<ModuleBase::Vector3<double>> anchor_lambda;
++    const auto residual_rms = [&](const std::vector<ModuleBase::Vector3<double>>& moments) {
++        double sum = 0.0;
++        for (int atom = 0; atom < nat; ++atom)
++        {
++            for (int axis = 0; axis < 3; ++axis)
++            {
++                if (this->state_.constrain_[atom][axis])
++                {
++                    const double residual = moments[atom][axis] - this->state_.target_mag_[atom][axis];
++                    sum += residual * residual;
++                }
++            }
++        }
++        return std::sqrt(sum / nat);
++    };
++#endif
+
+     print_header(*this, ofs_running);
+
+@@ -124,6 +150,13 @@
+             // =============================================================
+             this->cal_mw_from_lambda(i_step, nullptr, lcao_solver);
+             spin = this->state_.get_mi();
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++            if (projected_inner)
++            {
++                anchor_lambda = this->state_.get_sc_lambda();
++                ofs_running << "PW_STYLE_ANCHOR outer " << outer_step << '\n';
++            }
++#endif
+
+             // Save initial lambda: for unconstrained components (constrain==0), set to 0
+             where_fill_scalar_else_2d(this->state_.constrain_, 0, zero, this->state_.get_sc_lambda(), initial_lambda);
+@@ -165,8 +198,50 @@
+                 }
+             }
+
+-            // Apply lambda and compute new magnetic moments
+-            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++            bool evaluated_in_subspace = false;
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++            if (projected_inner)
++            {
++                std::vector<ModuleBase::Vector3<double>> projected_moments;
++                const bool available = this->try_lazy_projector_trial(anchor_lambda, true, projected_moments, ofs_running);
++                if (available)
++                {
++                    evaluated_in_subspace = true;
++                    const double predicted = residual_rms(projected_moments);
++                    const double threshold = this->state_.get_current_sc_thr();
++                    const bool exhausted = i_step == this->state_.get_nsc() - 1;
++                    if (exhausted || predicted < threshold)
++                    {
++                        this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++                        const auto& accepted_moments = this->state_.get_mi();
++                        const double actual = residual_rms(accepted_moments);
++                        double max_error = 0.0;
++                        for (int atom = 0; atom < nat; ++atom)
++                        {
++                            const auto error = projected_moments[atom] - accepted_moments[atom];
++                            max_error = std::max(max_error, error.norm());
++                        }
++                        const bool reanchor = !exhausted && actual >= threshold;
++                        ofs_running << "PW_STYLE_REFRESH outer " << outer_step << " inner " << i_step
++                                    << " predicted " << predicted << " actual " << actual
++                                    << " max_error_uB " << max_error << " reanchor " << reanchor << '\n';
++                        if (reanchor)
++                        {
++                            anchor_lambda = this->state_.get_sc_lambda();
++                        }
++                    }
++                }
++                else
++                {
++                    ofs_running << "PW_STYLE_FALLBACK outer " << outer_step << " inner " << i_step << '\n';
++                    projected_inner = false;
++                }
++            }
++#endif
++            if (!evaluated_in_subspace)
++            {
++                this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++            }
+             new_spin = this->state_.get_mi();
+
+             // Check if gradient dM/dlambda has decayed below threshold
+@@ -321,6 +396,13 @@
+         // =============================================================
+         // CUMULATIVE STEP UPDATE
+         // =============================================================
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++        std::vector<ModuleBase::Vector3<double>> ref_lambda;
++        if (lazy_probe != nullptr)
++        {
++            ref_lambda = projected_inner ? anchor_lambda : this->state_.get_sc_lambda();
++        }
++#endif
+         dnu_last_step = dnu;
+         // dnu = dnu + alpha_trial * search
+         add_scalar_multiply_2d(dnu, search, alpha_trial, dnu);
+@@ -350,8 +432,37 @@
+         // =============================================================
+         // TRIAL STEP: compute Mi at trial position
+         // =============================================================
+-        this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++        bool used_lazy_trial = false;
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++        std::vector<ModuleBase::Vector3<double>> lazy_preview;
++        if (lazy_probe != nullptr)
++        {
++            const bool replace_trial = projected_inner || std::strcmp(lazy_probe, "trial") == 0;
++            used_lazy_trial = this->try_lazy_projector_trial(ref_lambda, replace_trial, lazy_preview, ofs_running);
++            if (projected_inner && !used_lazy_trial)
++            {
++                ofs_running << "PW_STYLE_FALLBACK outer " << outer_step << " trial " << i_step << '\n';
++                projected_inner = false;
++            }
++        }
++#endif
++        if (!used_lazy_trial)
++        {
++            this->cal_mw_from_lambda(i_step, delta_lambda.data(), lcao_solver);
++        }
+         spin_plus = this->state_.get_mi();
++#if defined(__LCAO) && defined(__CUDA) && defined(__MPI)
++        if (lazy_probe != nullptr && !used_lazy_trial && !lazy_preview.empty())
++        {
++            double error = 0.0;
++            for (int atom = 0; atom < lazy_preview.size(); ++atom)
++            {
++                const auto difference = lazy_preview[atom] - spin_plus[atom];
++                error = std::max(error, difference.norm());
++            }
++            ofs_running << "LAZY_PROJECTOR_FULL_TRIAL_REFERENCE error_uB " << error << '\n';
++        }
++#endif
+
+         // Find optimal step size via linear interpolation
+         alpha_opt = cal_alpha_opt(*this, spin, spin_plus, alpha_trial);

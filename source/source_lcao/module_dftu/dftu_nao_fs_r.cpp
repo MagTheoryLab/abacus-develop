@@ -445,7 +445,7 @@ void cal_fs_nao_r_impl(const UnitCell* ucell,
             density = collinear_dm.data();
         }
         hamilt::nonlocal_gpu::compute(packed, density, density_size, ucell->nat,
-                              cal_force, cal_stress, force.c, stress_tmp.data());
+                              cal_force, cal_stress, force.c, stress_tmp.data(), nullptr);
         ModuleBase::timer::end("DFTU", "gpu_contract");
     }
 #endif

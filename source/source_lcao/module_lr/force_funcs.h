@@ -106,7 +106,7 @@ ModuleBase::matrix cal_force_nonlocal(
     ModuleBase::matrix fvnl(ucell.nat, 3);
     ModuleBase::matrix svnl; // no use now, only for passing into interfaces
     // Preserve the host contraction for the LR response density matrix.
-    tmp_nonlocal.cal_force_stress(/*force*/true, /*stress*/false, dmr, fvnl, svnl, false);
+    tmp_nonlocal.cal_force_stress(/*force*/true, /*stress*/false, dmr, fvnl, svnl, false, nullptr);
     if (nspin == 2)
     {
         const_cast<module_dm::DensityMatrix<TK, double>*>(&dm)->switch_dmr(0);
@@ -148,7 +148,7 @@ ModuleBase::matrix cal_force_nonlocal_dvnl(
     ModuleBase::matrix fvnl(ucell.nat, 3);
     ModuleBase::matrix svnl; // no use now, only for passing into interfaces
     // Preserve the host contraction for the LR response density matrix.
-    tmp_nonlocal.cal_force_stress(/*force*/true, /*stress*/false, &tmp_dmr, fvnl, svnl, false);
+    tmp_nonlocal.cal_force_stress(/*force*/true, /*stress*/false, &tmp_dmr, fvnl, svnl, false, nullptr);
     return fvnl;
 }
 #endif // ABACUS_SOURCE_LCAO_MODULE_LR_FORCE_FUNCS_H

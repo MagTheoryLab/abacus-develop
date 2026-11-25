@@ -1,4 +1,5 @@
 #include "../nonlocal_fs_gpu.h"
+#include "../nonlocal_rotation.h"
 #include <gtest/gtest.h>
 #include <complex>
 #include <vector>
@@ -110,7 +111,7 @@ void check(int npol, bool dense)
         {
             std::vector<double> force(9, 0.0);
             std::vector<double> stress(6, 0.0);
-            compute(batch, dm.data(), dm.size(), 3, force_on, stress_on, force.data(), stress.data());
+            compute(batch, dm.data(), dm.size(), 3, force_on, stress_on, force.data(), stress.data(), nullptr);
             for (int i = 0; i < 9; ++i) EXPECT_NEAR(force[i], expected_force[i], 1e-12);
             for (int i = 0; i < 6; ++i) EXPECT_NEAR(stress[i], expected_stress[i], 1e-12);
         }
@@ -128,7 +129,66 @@ TEST(NonlocalForceStressGPU, EmptyRank)
     hamilt::nonlocal_gpu::Batch empty;
     double force[3] = {};
     double stress[6] = {};
-    hamilt::nonlocal_gpu::compute(empty, static_cast<const double*>(nullptr), 0, 1, true, true, force, stress);
+    hamilt::nonlocal_gpu::compute(empty, static_cast<const double*>(nullptr), 0, 1, true, true, force, stress, nullptr);
     for (double f : force) EXPECT_EQ(f, 0.0);
     for (double s : stress) EXPECT_EQ(s, 0.0);
+}
+
+TEST(NonlocalForceStressGPU, SpinRotationFiniteDifference)
+{
+    using Complex = std::complex<double>;
+    using namespace hamilt::nonlocal_gpu;
+    const Complex h[4] = {{0.8, 0.1}, {-0.3, 0.4}, {0.2, -0.1}, {-0.5, 0.3}};
+    const Complex dm[4] = {{0.7, 0.3}, {-0.1, 0.2}, {-0.2, -0.2}, {0.6, -0.4}};
+    Batch batch;
+    batch.projections = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
+    for (int s = 0; s < 4; ++s)
+    {
+        batch.couplings.push_back({0, 0, s, h[s].real(), h[s].imag()});
+    }
+    Task task = {};
+    task.rows = 1;
+    task.cols = 1;
+    task.npol = 2;
+    task.right = 4;
+    task.projectors = 1;
+    task.coupling_count = 4;
+    batch.tasks.push_back(task);
+
+    double rotation[3] = {};
+    double host[3] = {};
+    double stress[6] = {};
+    compute(batch, dm, 4, 1, false, true, nullptr, stress, rotation);
+    hamilt::add_soc_rotation(h, dm[0], dm[1], dm[2], dm[3], host);
+
+    const Complex pauli[3][4] = {{0, 1, 1, 0}, {0, Complex(0, -1), Complex(0, 1), 0}, {1, 0, 0, -1}};
+    for (int a = 0; a < 3; ++a)
+    {
+        const auto energy = [&](double angle) {
+            const Complex diagonal = std::cos(angle / 2);
+            const Complex scale(0, -std::sin(angle / 2));
+            const Complex u[4] = {diagonal + scale * pauli[a][0], scale * pauli[a][1],
+                                  scale * pauli[a][2], diagonal + scale * pauli[a][3]};
+            double result = 0.0;
+            for (int i = 0; i < 2; ++i)
+            {
+                for (int j = 0; j < 2; ++j)
+                {
+                    for (int k = 0; k < 2; ++k)
+                    {
+                        for (int l = 0; l < 2; ++l)
+                        {
+                            result += std::real(dm[2 * i + j] * u[2 * i + k] * h[2 * k + l]
+                                                * std::conj(u[2 * j + l]));
+                        }
+                    }
+                }
+            }
+            return result;
+        };
+        const double step = 1e-4;
+        const double expected = (energy(step) - energy(-step)) / (2 * step);
+        EXPECT_NEAR(rotation[a], expected, 1e-9);
+        EXPECT_NEAR(host[a], expected, 1e-9);
+    }
 }

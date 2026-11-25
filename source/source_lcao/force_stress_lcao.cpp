@@ -302,7 +302,7 @@ void Force_Stress_LCAO<T>::cal_operator_fs(UnitCell& ucell,
         hamilt::Nonlocal<hamilt::OperatorLCAO<T, double>> tmp_nonlocal(
             nullptr, kv.kvec_d, nullptr, &ucell, orb.cutoffs(), &gd,
             two_center_bundle.overlap_orb_beta.get());
-        tmp_nonlocal.cal_force_stress(isforce, isstress, dmR, parts.fvnl_dbeta, sparts.svnl_dbeta, use_gpu);
+        tmp_nonlocal.cal_force_stress(isforce, isstress, dmR, parts.fvnl_dbeta, sparts.svnl_dbeta, use_gpu, nullptr);
         
         if(td_stype == 2)
         {
@@ -362,7 +362,10 @@ void Force_Stress_LCAO<T>::cal_operator_fs(UnitCell& ucell,
         hamilt::Nonlocal<hamilt::OperatorLCAO<std::complex<double>, std::complex<double>>> tmp_nonlocal(
             nullptr, kv.kvec_d, nullptr, &ucell, orb.cutoffs(), &gd,
             two_center_bundle.overlap_orb_beta.get());
-        tmp_nonlocal.cal_force_stress(isforce, isstress, &tmp_dmr, parts.fvnl_dbeta, sparts.svnl_dbeta, use_gpu);
+        sparts.has_soc_rotation = isstress && cfg.lspinorb;
+        double* rotation = sparts.has_soc_rotation ? sparts.soc_rotation : nullptr;
+        tmp_nonlocal.cal_force_stress(isforce, isstress, &tmp_dmr, parts.fvnl_dbeta, sparts.svnl_dbeta, use_gpu,
+                                     rotation);
 
         // Local-potential (vl_dphi) Pulay term via grid integration
         edm_cal.ParaV = &pv;

@@ -45,6 +45,7 @@ struct FSCalcConfig
     bool domag_z;
     int gga_grad;
     bool gamma_only_pw;
+    bool lspinorb;
 };
 
 // Force/stress component matrices assembled by getForceStress. Grouping them
@@ -90,6 +91,8 @@ struct LCAOStressParts
     ModuleBase::matrix stress_dspin;
     ModuleBase::matrix stress_exx;
     ModuleBase::matrix stress_vdw;
+    bool has_soc_rotation = false;
+    double soc_rotation[3] = {};
 };
 
 

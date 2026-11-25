@@ -60,7 +60,8 @@ class Nonlocal<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                           const HContainer<TR>* dmR,
                           ModuleBase::matrix& force,
                           ModuleBase::matrix& stress,
-                          const bool use_gpu);
+                          const bool use_gpu,
+                          double* rotation);
 
     /**
  * @brief Calculate the derivative of the non-local pseudopotential Hamiltonian
@@ -196,7 +197,8 @@ class Nonlocal<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                         const hamilt::BaseMatrix<TR>* dmR_pointer,
                         const ModuleBase::Vector3<double>& dis1,
                         const ModuleBase::Vector3<double>& dis2,
-                        double* stress);
+                        double* stress,
+                        double* rotation);
 
     std::vector<AdjacentAtomInfo> adjs_all;
 };

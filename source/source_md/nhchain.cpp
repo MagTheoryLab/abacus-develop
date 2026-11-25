@@ -883,9 +883,10 @@ void Nose_Hoover::couple_stress()
         ModuleBase::WARNING_QUIT("Nose_Hoover", "Non-numeric stress component!");
     }
 
-    p_current[3] = stress(1, 2);
-    p_current[4] = stress(0, 2);
-    p_current[5] = stress(0, 1);
+    // The barostat couples to symmetric strain.
+    p_current[3] = 0.5 * stress(1, 2) + 0.5 * stress(2, 1);
+    p_current[4] = 0.5 * stress(0, 2) + 0.5 * stress(2, 0);
+    p_current[5] = 0.5 * stress(0, 1) + 0.5 * stress(1, 0);
 
     if (!std::isfinite(p_current[3]) || !std::isfinite(p_current[4]) || !std::isfinite(p_current[5]))
     {

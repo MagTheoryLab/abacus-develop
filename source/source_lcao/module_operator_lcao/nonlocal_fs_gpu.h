@@ -41,9 +41,9 @@ struct Batch
     std::vector<Task> tasks;
 };
 void compute(const Batch& batch, const double* dm, std::size_t dm_size,
-             int nat, bool cal_force, bool cal_stress, double* force, double* stress);
+             int nat, bool cal_force, bool cal_stress, double* force, double* stress, double* rotation);
 void compute(const Batch& batch, const std::complex<double>* dm, std::size_t dm_size,
-             int nat, bool cal_force, bool cal_stress, double* force, double* stress);
+             int nat, bool cal_force, bool cal_stress, double* force, double* stress, double* rotation);
 }
 }
 #endif

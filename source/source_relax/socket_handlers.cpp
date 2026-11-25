@@ -375,7 +375,7 @@ void compute_forces(UnitCell& ucell, ModuleESolver::ESolver* esolver, ComputedFr
     computed.forces_present = true;
 }
 
-void compute_stress(UnitCell& ucell, ModuleESolver::ESolver* esolver, ComputedFrame& computed)
+void compute_stress(UnitCell& ucell, ModuleESolver::ESolver* esolver, const Input_para& inp, ComputedFrame& computed)
 {
     ModuleBase::matrix stress;
     try
@@ -394,7 +394,21 @@ void compute_stress(UnitCell& ucell, ModuleESolver::ESolver* esolver, ComputedFr
     std::string local_message;
     try
     {
-        const SocketFrame::VirialConversion virial = SocketFrame::make_ipi_virial(matrix9_from_stress(stress),
+        auto wire_stress = matrix9_from_stress(stress);
+        if (inp.basis_type == "lcao" && inp.lspinorb)
+        {
+            // The fixed-cell socket stress property uses symmetric strain derivatives.
+            for (int i = 0; i < 3; ++i)
+            {
+                for (int j = i + 1; j < 3; ++j)
+                {
+                    const double symmetric = 0.5 * wire_stress[3 * i + j] + 0.5 * wire_stress[3 * j + i];
+                    wire_stress[3 * i + j] = symmetric;
+                    wire_stress[3 * j + i] = symmetric;
+                }
+            }
+        }
+        const SocketFrame::VirialConversion virial = SocketFrame::make_ipi_virial(wire_stress,
                                                                                   ucell.omega,
                                                                                   kStressAbsoluteTolerance,
                                                                                   kStressRelativeTolerance);
@@ -444,7 +458,7 @@ void handle_posdata(IpiSocket& socket, DriverContext& context, std::ofstream& of
     }
     if (context.inp->cal_stress)
     {
-        compute_stress(*context.ucell, context.esolver, computed);
+        compute_stress(*context.ucell, context.esolver, *context.inp, computed);
     }
     computed.valid = true;
     context.published = computed;

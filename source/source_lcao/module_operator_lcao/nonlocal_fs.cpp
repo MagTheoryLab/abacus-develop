@@ -1,4 +1,5 @@
 #include "nonlocal.h"
+#include "nonlocal_rotation.h"
 #ifdef __CUDA
 #include "nonlocal_fs_gpu.h"
 #endif
@@ -15,7 +16,8 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
                                                   const HContainer<TR>* dmR,
                                                   ModuleBase::matrix& force,
                                                   ModuleBase::matrix& stress,
-                                                  const bool use_gpu)
+                                                  const bool use_gpu,
+                                                  double* rotation)
 {
     ModuleBase::TITLE("Nonlocal", "cal_force_stress");
 
@@ -25,6 +27,11 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
     const Parallel_Orbitals* paraV = dmR->get_paraV();
     const int npol = this->ucell->get_npol();
     std::vector<double> stress_tmp(6, 0);
+    if (rotation != nullptr)
+    {
+        assert(cal_stress && npol == 2);
+        std::fill_n(rotation, 3, 0.0);
+    }
     if (cal_force)
     {
         force.zero_out();
@@ -39,6 +46,8 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
     #pragma omp parallel
     {
     std::vector<double> stress_local(6, 0);
+    double rotation_local[3] = {};
+    double* rotation_out = rotation != nullptr ? rotation_local : nullptr;
     ModuleBase::matrix force_local(force.nr, force.nc);
     #pragma omp for schedule(dynamic)
     for (int iat0 = 0; iat0 < this->ucell->nat; iat0++)
@@ -244,7 +253,8 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
                                              tmp,
                                              dis1,
                                              dis2,
-                                             stress_local.data());
+                                             stress_local.data(),
+                                             rotation_out);
                     }
                 }
             }
@@ -261,6 +271,13 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
             for(int i = 0; i < 6; i++)
             {
                 stress_tmp[i] += stress_local[i];
+            }
+            if (rotation != nullptr)
+            {
+                for (int a = 0; a < 3; ++a)
+                {
+                    rotation[a] += rotation_local[a];
+                }
             }
         }
 
@@ -297,7 +314,7 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
             packed.couplings.insert(packed.couplings.end(), batch.couplings.begin(), batch.couplings.end());
         }
         nonlocal_gpu::compute(packed, dmR->get_wrapper(), dmR->get_nnr(),
-                              ucell->nat, cal_force, cal_stress, force.c, stress_tmp.data());
+                              ucell->nat, cal_force, cal_stress, force.c, stress_tmp.data(), rotation);
         ModuleBase::timer::end("Nonlocal", "gpu_contract");
     }
 #endif
@@ -319,6 +336,10 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_force_stress(const bool cal_force,
 #ifdef __MPI
         // sum up the occupation matrix
         Parallel_Reduce::reduce_all(stress_tmp.data(), 6);
+        if (rotation != nullptr)
+        {
+            Parallel_Reduce::reduce_all(rotation, 3);
+        }
 #endif
         const double weight = this->ucell->lat0 / this->ucell->omega;
         for (int i = 0; i < 6; i++)
@@ -411,7 +432,8 @@ inline void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::
                                                 const hamilt::BaseMatrix<std::complex<double>>* dmR_pointer,
                                                 const ModuleBase::Vector3<double>& dis1,
                                                 const ModuleBase::Vector3<double>& dis2,
-                                                double* stress)
+                                                double* stress,
+                                                double* rotation)
 {
     // npol is the number of polarizations,
     // 1 for non-magnetic (one Hamiltonian matrix only has spin-up or spin-down),
@@ -440,6 +462,7 @@ inline void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::
             assert(nlm1.size() == nlm2.size());
 #endif
             std::vector<std::complex<double>> nlm_tmp(npol2 * 6, ModuleBase::ZERO);
+            std::complex<double> h[4] = {};
             for (int is = 0; is < 4; ++is)
             {
                 for (int no = 0; no < this->ucell->atoms[T0].ncpp.non_zero_count_soc[is]; no++)
@@ -447,6 +470,10 @@ inline void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::
                     const int p1 = this->ucell->atoms[T0].ncpp.index1_soc[is][no];
                     const int p2 = this->ucell->atoms[T0].ncpp.index2_soc[is][no];
                     this->ucell->atoms[T0].ncpp.get_d(is, p1, p2, tmp_d);
+                    if (rotation != nullptr)
+                    {
+                        h[is] += nlm1[p1] * nlm2[p2] * (*tmp_d);
+                    }
                     nlm_tmp[is*6] += (nlm1[p1 + length] * dis1.x * nlm2[p2] + nlm1[p1] * nlm2[p2 + length] * dis2.x) * (*tmp_d);
                     nlm_tmp[is*6+1] += (nlm1[p1 + length] * dis1.y * nlm2[p2] + nlm1[p1] * nlm2[p2 + length] * dis2.y) * (*tmp_d);
                     nlm_tmp[is*6+2] += (nlm1[p1 + length] * dis1.z * nlm2[p2] + nlm1[p1] * nlm2[p2 + length] * dis2.z) * (*tmp_d);
@@ -462,6 +489,11 @@ inline void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::
                         + dm_pointer[step_trace[1]] * nlm_tmp[i+6]
                         + dm_pointer[step_trace[2]] * nlm_tmp[i+12]
                         + dm_pointer[step_trace[3]] * nlm_tmp[i+18]).real();
+            }
+            if (rotation != nullptr)
+            {
+                add_soc_rotation(h, dm_pointer[0], dm_pointer[1],
+                                 dm_pointer[step_trace[2]], dm_pointer[step_trace[3]], rotation);
             }
             dm_pointer += npol;
         }
@@ -529,7 +561,8 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_stress_IJR(const int& iat1,
                                                 const hamilt::BaseMatrix<TR>* dmR_pointer,
                                                 const ModuleBase::Vector3<double>& dis1,
                                                 const ModuleBase::Vector3<double>& dis2,
-                                                double* stress)
+                                                double* stress,
+                                                double* /* rotation */)
 {
     // ---------------------------------------------
     // calculate the Nonlocal matrix for each pair of orbitals
@@ -576,15 +609,15 @@ void Nonlocal<OperatorLCAO<TK, TR>>::cal_stress_IJR(const int& iat1,
 template void Nonlocal<OperatorLCAO<double, double>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<double>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu, double* rotation);
 template void Nonlocal<OperatorLCAO<std::complex<double>, double>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<double>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu, double* rotation);
 template void Nonlocal<OperatorLCAO<std::complex<double>, std::complex<double>>>::cal_force_stress(
     const bool cal_force, const bool cal_stress,
     const HContainer<std::complex<double>>* dmR,
-    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu);
+    ModuleBase::matrix& force, ModuleBase::matrix& stress, const bool use_gpu, double* rotation);
 
 // explicit member function instantiations for cal_force_IJR (generic template)
 template void Nonlocal<OperatorLCAO<double, double>>::cal_force_IJR(
@@ -611,7 +644,7 @@ template void Nonlocal<OperatorLCAO<double, double>>::cal_stress_IJR(
     const hamilt::BaseMatrix<double>* dmR_pointer,
     const ModuleBase::Vector3<double>& dis1,
     const ModuleBase::Vector3<double>& dis2,
-    double* stress);
+    double* stress, double* rotation);
 template void Nonlocal<OperatorLCAO<std::complex<double>, double>>::cal_stress_IJR(
     const int& iat1, const int& iat2, const int& T0,
     const Parallel_Orbitals* paraV,
@@ -620,6 +653,6 @@ template void Nonlocal<OperatorLCAO<std::complex<double>, double>>::cal_stress_I
     const hamilt::BaseMatrix<double>* dmR_pointer,
     const ModuleBase::Vector3<double>& dis1,
     const ModuleBase::Vector3<double>& dis2,
-    double* stress);
+    double* stress, double* rotation);
 
 } // namespace hamilt

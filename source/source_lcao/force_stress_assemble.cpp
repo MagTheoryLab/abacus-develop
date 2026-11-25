@@ -330,10 +330,25 @@ void assemble_print_stress(const UnitCell& ucell,
         symm->symmetrize_mat3(scs, ucell.lat);
     } // end symmetry
 
+    // DeePKS labels store six strain derivatives.
     DeePKS_domain::write_stress(scs, sparts.svnl_dalpha, ucell.omega, dpks_out_type, PARAM.inp);
+
+    if (sparts.has_soc_rotation)
+    {
+        for (int a = 0; a < 3; ++a)
+        {
+            const int i = (a + 1) % 3;
+            const int j = (a + 2) % 3;
+            // dE/dtheta_a = Omega (sigma_ij - sigma_ji) for compression-positive stress.
+            const double skew = sparts.soc_rotation[a] / (2.0 * ucell.omega);
+            scs(i, j) += skew;
+            scs(j, i) -= skew;
+        }
+    }
 
     // print Rydberg stress or not
     bool ry = false;
+    auto& log = GlobalV::ofs_running;
 
     // test stress each terms if needed
     if (istests)
@@ -354,45 +369,45 @@ void assemble_print_stress(const UnitCell& ucell,
 
         const bool screen = PARAM.inp.test_stress;
 
-        GlobalV::ofs_running << "\n PARTS OF STRESS: " << std::endl;
-        GlobalV::ofs_running << std::setiosflags(std::ios::showpos);
-        GlobalV::ofs_running << std::setiosflags(std::ios::fixed) << std::setprecision(10) << std::endl;
-        ModuleIO::print_stress("OVERLAP  STRESS", sparts.soverlap, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("T        STRESS", sparts.stvnl_dphi, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("VNL      STRESS", sparts.svnl_dbeta, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("T_VNL    STRESS", stvnl, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("VL_dPHI  STRESS", sparts.svl_dphi, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("VL_dVL   STRESS", sparts.sigmadvl, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("HAR      STRESS", sparts.sigmahar, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("EWALD    STRESS", sparts.sigmaewa, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("cc       STRESS", sparts.sigmacc, screen, ry, GlobalV::ofs_running);
-        ModuleIO::print_stress("XC       STRESS", sparts.sigmaxc, screen, ry, GlobalV::ofs_running);
+        log << "\n PARTS OF STRESS: " << std::endl;
+        log << std::setiosflags(std::ios::showpos);
+        log << std::setiosflags(std::ios::fixed) << std::setprecision(10) << std::endl;
+        ModuleIO::print_stress("OVERLAP  STRESS", sparts.soverlap, screen, ry, log);
+        ModuleIO::print_stress("T        STRESS", sparts.stvnl_dphi, screen, ry, log);
+        ModuleIO::print_stress("VNL      STRESS", sparts.svnl_dbeta, screen, ry, log);
+        ModuleIO::print_stress("T_VNL    STRESS", stvnl, screen, ry, log);
+        ModuleIO::print_stress("VL_dPHI  STRESS", sparts.svl_dphi, screen, ry, log);
+        ModuleIO::print_stress("VL_dVL   STRESS", sparts.sigmadvl, screen, ry, log);
+        ModuleIO::print_stress("HAR      STRESS", sparts.sigmahar, screen, ry, log);
+        ModuleIO::print_stress("EWALD    STRESS", sparts.sigmaewa, screen, ry, log);
+        ModuleIO::print_stress("cc       STRESS", sparts.sigmacc, screen, ry, log);
+        ModuleIO::print_stress("XC       STRESS", sparts.sigmaxc, screen, ry, log);
         if (vdw_result != nullptr)
         {
-            ModuleIO::print_stress("VDW      STRESS", sparts.stress_vdw, screen, ry, GlobalV::ofs_running);
+            ModuleIO::print_stress("VDW      STRESS", sparts.stress_vdw, screen, ry, log);
         }
         if (PARAM.inp.dft_plus_u)
         {
-            ModuleIO::print_stress("DFTU     STRESS", sparts.stress_u, screen, ry, GlobalV::ofs_running);
+            ModuleIO::print_stress("DFTU     STRESS", sparts.stress_u, screen, ry, log);
         }
         if (PARAM.inp.sc_mag_switch)
         {
-            ModuleIO::print_stress("DeltaSpin  STRESS", sparts.stress_dspin, screen, ry, GlobalV::ofs_running);
+            ModuleIO::print_stress("DeltaSpin  STRESS", sparts.stress_dspin, screen, ry, log);
         }
 #ifdef __EXX
         if (exx_info.info_global.cal_exx)
         {
-            ModuleIO::print_stress("EXX      STRESS", sparts.stress_exx, screen, ry, GlobalV::ofs_running);
+            ModuleIO::print_stress("EXX      STRESS", sparts.stress_exx, screen, ry, log);
         }
 #endif
-        ModuleIO::print_stress("TOTAL    STRESS", scs, screen, ry, GlobalV::ofs_running);
+        ModuleIO::print_stress("TOTAL    STRESS", scs, screen, ry, log);
     } // end of test
 
-    GlobalV::ofs_running << std::setiosflags(std::ios::left);
+    log << std::setiosflags(std::ios::left);
 
     // print total stress
     bool screen_normal = true;
-    ModuleIO::print_stress("TOTAL-STRESS", scs, screen_normal, ry, GlobalV::ofs_running);
+    ModuleIO::print_stress("TOTAL-STRESS", scs, screen_normal, ry, log);
 
     double unit_transform = 0.0;
     unit_transform = ModuleBase::RYDBERG_SI / pow(ModuleBase::BOHR_RADIUS_SI, 3) * 1.0e-8;

@@ -41,12 +41,13 @@ void spinconstrain::SpinConstrain<double>::cal_mi_lcao(const int& step, bool pri
 
 /// @brief run_lambda_loop stub (TK=double): no-op
 template <>
-void spinconstrain::SpinConstrain<double>::run_lambda_loop(int outer_step,
+bool spinconstrain::SpinConstrain<double>::run_lambda_loop(int outer_step,
         bool rerun,
         std::ostream& ofs_running,
         hsolver::HSolverLCAO<double>* lcao_solver,
-        bool use_lcao_ritz)
+        LcaoRitzMode ritz_mode)
 {
+    return false;
 }
 
 /// @brief check_rms_stop stub (TK=double): always return false (continue)

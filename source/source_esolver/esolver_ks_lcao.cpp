@@ -8,6 +8,7 @@
 #include "source_estate/elecstate_lcao.h"
 #include "source_estate/elecstate_tools.h"
 #include "source_estate/module_charge/chg_dmr.h"
+#include "source_estate/module_charge/chg_drho.h"
 #include "source_estate/module_charge/chg_symm.h"
 #include "source_hamilt/hamilt_hs_adapter.h"
 #include "source_hamilt/hs_matrix_k.h"
@@ -592,7 +593,14 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     }
 
     // 2) run the inner lambda loop to constrain atomic moments with the DeltaSpin method
+    auto& log = GlobalV::ofs_running;
     bool skip_solve = false;
+    bool ritz_density = false;
+    const auto update_charge_from_dm = [&]() {
+        const double density_scale = LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin,
+                                                         &this->chr, this->inp_->nelec, ucell.omega, false);
+        this->pelec->pot->set_lcao_density_scale(density_scale);
+    };
     if (this->inp_->sc_mag_switch)
     {
         spinconstrain::SpinConstrain<TK>& sc = spinconstrain::SpinConstrain<TK>::getScInstance();
@@ -602,12 +610,21 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
                                   && this->inp_->device == "gpu" && this->inp_->nspin == 4;
         if (this->inp_->sc_lambda_strategy == "linear_scan")
         {
-            sc.run_lambda_linear_scan(outer_step, GlobalV::ofs_running, lcao_solver);
+            sc.run_lambda_linear_scan(outer_step, log, lcao_solver);
             skip_solve = true;
         }
         else if (sc.mag_converged() || (this->drho > 0 && this->drho < this->inp_->sc_scf_thr))
         {
-            sc.run_lambda_loop(outer_step, true, GlobalV::ofs_running, lcao_solver, use_lcao_ritz);
+            using spinconstrain::LcaoRitzMode;
+            auto ritz_mode = use_lcao_ritz ? LcaoRitzMode::trials : LcaoRitzMode::disabled;
+            if (use_lcao_ritz && this->drho > this->scf_thr && iter < this->maxniter
+                && this->inp_->calculation != "nscf" && this->inp_->esolver_type == "ksdft"
+                && this->inp_->bndpar == 1 && !this->inp_->scf_os_stop && !this->inp_->dft_plus_u
+                && !this->inp_->deepks_scf && !this->inp_->rdmft && !this->exx_info_.info_global.cal_exx)
+            {
+                ritz_mode = LcaoRitzMode::accept_density;
+            }
+            ritz_density = sc.run_lambda_loop(outer_step, true, log, lcao_solver, ritz_mode);
             this->ds_rms_ = sc.get_last_rms_error();
             sc.set_mag_converged(true);
             skip_solve = true;
@@ -673,9 +690,7 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
     {
         // Lambda loop updated the density matrix (DM) but not the real-space charge density.
         // HSolver was skipped, so we need to sync rho from DM manually.
-        const double density_scale = LCAO_domain::dm2rho(this->dmat.dm->get_dmr_vec(), this->inp_->nspin,
-                                                       &this->chr, this->inp_->nelec, ucell.omega, false);
-        this->pelec->pot->set_lcao_density_scale(density_scale);
+        update_charge_from_dm();
     }
 
     // 4) EXX
@@ -708,6 +723,23 @@ void ESolver_KS_LCAO<TK, TR>::hamilt2rho_single(UnitCell& ucell, int istep, int 
 
     // 5) symmetrize the charge density
     module_charge::symmetrize_rho(this->inp_->nspin, this->chr, this->pw_rho, ucell.symm);
+    if (ritz_density)
+    {
+        const double ritz_drho = module_charge::cal_drho(&this->chr, this->inp_->nelec, *this->pw_rho,
+                                                         this->p_chgmix->get_mixing_config(), ucell.omega, ucell.tpiba);
+        if (!(ritz_drho > this->scf_thr))
+        {
+            // Recheck a potentially converged charge density at the same potential.
+            log << "LCAO_RITZ_DENSITY_RECHECK iter " << iter << " drho " << ritz_drho << '\n';
+            auto& sc = spinconstrain::SpinConstrain<TK>::getScInstance();
+            const int outer_step = iter - 1;
+            sc.run_lambda_loop(outer_step, true, log, this->cusolver_lcao_.get(),
+                               spinconstrain::LcaoRitzMode::trials);
+            this->ds_rms_ = sc.get_last_rms_error();
+            update_charge_from_dm();
+            module_charge::symmetrize_rho(this->inp_->nspin, this->chr, this->pw_rho, ucell.symm);
+        }
+    }
 
     // 6) calculate delta energy
     this->pelec->f_en.deband = this->pelec->cal_delta_eband(ucell);

@@ -79,9 +79,9 @@
  *   - decay_grad thresholds are not too aggressive
  */
 template <>
-void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
+bool spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
     int outer_step, bool rerun, std::ostream& ofs_running, hsolver::HSolverLCAO<std::complex<double>>* lcao_solver,
-    bool use_lcao_ritz)
+    LcaoRitzMode ritz_mode)
 {
     int nat = this->get_nat();
     int ntype = this->get_ntype();
@@ -116,13 +116,15 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
 
     double inner_loop_duration = 0.0;
     hsolver::LcaoRitzReference* capture_reference = nullptr;
+    bool ritz_density = false;
 
 #if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
     using Complex = std::complex<double>;
     using Dspin = hamilt::DeltaSpin<hamilt::OperatorLCAO<Complex, Complex>>;
     const auto& decay_grad = this->state_.get_decay_grad();
     const bool check_decay = std::any_of(decay_grad.begin(), decay_grad.end(), [](double value) { return value > 0; });
-    bool projected = use_lcao_ritz && lcao_solver && this->state_.nspin_ == 4 && this->state_.get_nsc() > 2
+    bool projected = ritz_mode != LcaoRitzMode::disabled && lcao_solver && this->state_.nspin_ == 4
+                     && this->state_.get_nsc() > 2
                      && !this->state_.direction_only_ && !check_decay && !this->pelec->skip_weights;
     hsolver::LcaoRitzReference reference;
     std::unique_ptr<LcaoRitzTrial> ritz;
@@ -157,14 +159,14 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
         return std::sqrt(square / nat);
     };
 
-    const auto evaluate_trial = [&]() {
+    const auto evaluate_trial = [&](bool publish) {
         if (!ritz)
         {
-            const auto* estate = static_cast<const elecstate::ElecStateLCAO<Complex>*>(this->pelec);
+            auto* estate = static_cast<elecstate::ElecStateLCAO<Complex>*>(this->pelec);
             auto* dspin = static_cast<Dspin*>(this->p_operator);
             ritz.reset(new LcaoRitzTrial(*estate, *dspin, reference, reference_lambda, nlocal));
         }
-        return ritz->evaluate(this->state_.get_sc_lambda(), this->state_.get_mi(), outer_step, ofs_running);
+        return ritz->evaluate(this->state_.get_sc_lambda(), this->state_.get_mi(), outer_step, ofs_running, publish);
     };
 
     const auto stop_projecting = [&]() {
@@ -172,6 +174,22 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
         ritz.reset();
         reference.energy_by_k.clear();
     };
+
+    const auto accept_ritz_density = [&]() {
+        // Stay on the exact path for large steps and for final magnetic refinement.
+        const double max_lambda_change = 0.06 / ModuleBase::Ry_to_eV;
+        const auto& lambda = this->state_.get_sc_lambda();
+        for (int ia = 0; ia < nat; ++ia)
+        {
+            const auto change = lambda[ia] - reference_lambda[ia];
+            if (!(change.norm() <= max_lambda_change))
+            {
+                return false;
+            }
+        }
+        return evaluate_trial(true);
+    };
+    double anchor_rms = 0.0;
 #endif
 
     print_header(*this, ofs_running);
@@ -196,6 +214,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
             if (projected)
             {
                 reference_lambda = this->state_.get_sc_lambda();
+                anchor_rms = residual_rms(spin);
             }
 #endif
 
@@ -244,13 +263,36 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
             const bool exhausted = i_step == this->state_.get_nsc() - 1;
             if (projected && !exhausted)
             {
-                if (!evaluate_trial())
+                if (!evaluate_trial(false))
                 {
                     stop_projecting();
                 }
                 else
                 {
                     subspace_only = residual_rms(this->state_.get_mi()) >= this->state_.get_current_sc_thr();
+                }
+            }
+            if (projected && exhausted && ritz_mode == LcaoRitzMode::accept_density
+                && anchor_rms > 100 * this->state_.get_sc_thr() && accept_ritz_density())
+            {
+                const auto prediction = this->state_.get_mi();
+                stop_projecting();
+                auto* estate = static_cast<elecstate::ElecStateLCAO<Complex>*>(this->pelec);
+                if (estate->cal_dmr_from_k_owner(estate->wg, *this->dm_))
+                {
+                    this->cal_mi_lcao(i_step);
+                    double max_error = 0.0;
+                    for (int ia = 0; ia < nat; ++ia)
+                    {
+                        const auto difference = prediction[ia] - this->state_.get_mi()[ia];
+                        const double error = difference.norm();
+                        max_error = std::isfinite(error) ? std::max(max_error, error)
+                                                          : std::numeric_limits<double>::infinity();
+                    }
+                    ritz_density = max_error < 1e-7;
+                    subspace_only = ritz_density;
+                    ofs_running << "LCAO_RITZ_DMR outer " << outer_step << " inner " << i_step
+                                << " moment_error_uB " << max_error << " accepted " << ritz_density << '\n';
                 }
             }
 #endif
@@ -398,7 +440,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
                 {
                     std::cout<<" DeltaSpin: RMS error too large ("<<rms_error<<"), rerun inner loop with full PW solver"<<std::endl;
                     std::cout<<std::endl;
-                    this->run_lambda_loop(outer_step, false, ofs_running, lcao_solver, false);
+                    this->run_lambda_loop(outer_step, false, ofs_running, lcao_solver, LcaoRitzMode::disabled);
                 }
             }
             break;
@@ -462,7 +504,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
 #if defined(__CUDA) && defined(__MPI) && defined(__LCAO)
         if (projected)
         {
-            projected_trial = evaluate_trial();
+            projected_trial = evaluate_trial(false);
             if (!projected_trial)
             {
                 ofs_running << "LCAO_RITZ_FALLBACK outer " << outer_step << '\n';
@@ -525,5 +567,5 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
         alpha_trial = alpha_trial * pow(g, 0.7);
     }
 
-    return;
+    return ritz_density;
 }

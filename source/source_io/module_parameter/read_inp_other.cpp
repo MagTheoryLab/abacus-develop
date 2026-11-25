@@ -187,7 +187,8 @@ When false (default), both the direction and magnitude of the magnetic moment ar
         item.type = "String";
         item.description = R"(Lambda update strategy for spin-constrained DFT:
 * bfgs: BFGS quasi-Newton method
-* lcao_ritz: Ritz subspace trials with a full accepted-state refresh for noncollinear CUDA/MPI LCAO cuSolver runs with nsc > 2.
+* lcao_ritz: Ritz subspace trials for noncollinear CUDA/MPI LCAO cuSolver runs with nsc > 2.
+  Intermediate SCF steps can use the Ritz density after the lambda budget is exhausted, the maximum change in lambda is at most 0.06 eV/uB, and the starting magnetic RMS exceeds 100 times sc_thr. A converged charge density is verified with a full-space solve.
   Other spin constraints and solver configurations use the full-space lambda loop.
 * linear_response: linear response (Scheme B)
 * augmented_lagrangian: augmented Lagrangian (Scheme C)

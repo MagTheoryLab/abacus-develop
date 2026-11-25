@@ -16,7 +16,7 @@
 
 namespace spinconstrain
 {
-LcaoRitzTrial::LcaoRitzTrial(const elecstate::ElecStateLCAO<Complex>& estate,
+LcaoRitzTrial::LcaoRitzTrial(elecstate::ElecStateLCAO<Complex>& estate,
                            Dspin& dspin,
                            const hsolver::LcaoRitzReference& reference,
                            const Moments& lambda,
@@ -27,7 +27,7 @@ LcaoRitzTrial::LcaoRitzTrial(const elecstate::ElecStateLCAO<Complex>& estate,
 
 LcaoRitzTrial::~LcaoRitzTrial() = default;
 
-bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_step, std::ostream& log)
+bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_step, std::ostream& log, bool publish)
 {
     const int bands = estate_.ekb.nc;
     const int kpoints = estate_.ekb.nr;
@@ -131,7 +131,8 @@ bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_s
     {
         if (waves[ik] != nullptr)
         {
-            gpu_->solve(ik, waves[ik]->get_pointer(), reference_.energy_by_k[ik].data(), delta.data(), &eigen(ik, 0));
+            gpu_->solve(ik, waves[ik]->get_pointer(), reference_.energy_by_k[ik].data(), delta.data(),
+                        &eigen(ik, 0), publish);
         }
     }
     const int energy_count = kpoints * bands;
@@ -145,6 +146,23 @@ bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_s
     for (int ia = 0; ia < nat; ++ia)
     {
         result[ia] = ModuleBase::Vector3<double>(trial[3 * ia], trial[3 * ia + 1], trial[3 * ia + 2]);
+    }
+    if (publish)
+    {
+        for (int ik = 0; ik < kpoints; ++ik)
+        {
+            if (waves[ik] != nullptr)
+            {
+                gpu_->publish_wavefunctions(ik, waves[ik]->get_pointer());
+            }
+        }
+        estate_.ekb = std::move(eigen);
+        estate_.wg = std::move(wg);
+        estate_.eferm = fermi;
+        estate_.f_en.demet = energy.demet;
+        estate_.nelec_spin = std::move(nelec);
+        elecstate::calEBand(estate_.ekb, estate_.wg, estate_.f_en);
+        dspin_.update_lambda();
     }
     const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - trial_begin).count();
     log << "LCAO_RITZ_TRIAL outer " << outer_step << " seconds " << elapsed << '\n';

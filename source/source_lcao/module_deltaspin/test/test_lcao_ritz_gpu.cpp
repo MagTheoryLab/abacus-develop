@@ -48,7 +48,7 @@ TEST(LcaoRitzGpu, MixedBlockWidthsPreserveRealSpaceCutoff)
     const double weights[] = {1.0, 0.0, 0.5, 0.0};
     const double expected_energy[] = {0.1, 0.3, 1.025, 1.375};
     double eigen[bands] = {};
-    ritz.solve(owned_k, columns_device, reference, lambda, eigen);
+    ritz.solve(owned_k, columns_device, reference, lambda, eigen, true);
     for (int i = 0; i < bands; ++i)
     {
         EXPECT_NEAR(eigen[i], expected_energy[i], 1e-12);
@@ -63,4 +63,49 @@ TEST(LcaoRitzGpu, MixedBlockWidthsPreserveRealSpaceCutoff)
             EXPECT_NEAR(moments[i], expected_moments[i], 1e-12);
         }
     }
+    ritz.publish_wavefunctions(owned_k, columns_device);
+    double published_moments[6] = {};
+    ritz.moments(owned_k, columns_device, weights, true, published_moments);
+    for (int i = 0; i < 6; ++i)
+    {
+        EXPECT_NEAR(published_moments[i], expected_moments[i], 1e-12);
+    }
+}
+
+TEST(LcaoRitzGpu, PublishesRotationWithoutOmittedPairs)
+{
+    int devices = 0;
+    if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+    {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    using Complex = std::complex<double>;
+    spinconstrain::RitzProjectorGeometry geometry;
+    geometry.projector_counts = {1};
+    const ModuleBase::Vector3<double> gamma(0.0, 0.0, 0.0);
+    const Complex projector = 1.0;
+    spinconstrain::LcaoRitzGpu ritz(2, 1, 2, 1, geometry);
+    ritz.prepare(0, &projector, gamma);
+
+    Complex columns[] = {1.0, 0.0, 0.0, 1.0};
+    Complex* device_columns = nullptr;
+    const size_t bytes = sizeof(columns);
+    CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&device_columns), bytes));
+    std::unique_ptr<Complex, decltype(&cudaFree)> storage(device_columns, cudaFree);
+    CHECK_CUDA(cudaMemcpy(device_columns, columns, bytes, cudaMemcpyHostToDevice));
+
+    const double reference[] = {0.0, 0.0};
+    const double lambda[] = {0.25, 0.0, 0.0};
+    double energy = 0.0;
+    ritz.solve(0, device_columns, reference, lambda, &energy, true);
+    ritz.publish_wavefunctions(0, device_columns);
+    CHECK_CUDA(cudaMemcpy(columns, device_columns, bytes, cudaMemcpyDeviceToHost));
+    const Complex coherence = std::conj(columns[0]) * columns[1];
+    EXPECT_NEAR(energy, -0.25, 1e-12);
+    EXPECT_NEAR(std::norm(columns[0]), 0.5, 1e-12);
+    EXPECT_NEAR(std::norm(columns[1]), 0.5, 1e-12);
+    EXPECT_NEAR(coherence.real(), -0.5, 1e-12);
+    EXPECT_NEAR(coherence.imag(), 0.0, 1e-12);
+    EXPECT_EQ(columns[2], Complex(0.0));
+    EXPECT_EQ(columns[3], Complex(1.0));
 }

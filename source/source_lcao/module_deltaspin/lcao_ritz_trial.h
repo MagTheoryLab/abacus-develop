@@ -37,17 +37,17 @@ class LcaoRitzTrial
     using Dspin = hamilt::DeltaSpin<hamilt::OperatorLCAO<Complex, Complex>>;
     using Moments = std::vector<ModuleBase::Vector3<double>>;
 
-    LcaoRitzTrial(const elecstate::ElecStateLCAO<Complex>& estate,
+    LcaoRitzTrial(elecstate::ElecStateLCAO<Complex>& estate,
                   Dspin& dspin,
                   const hsolver::LcaoRitzReference& reference,
                   const Moments& lambda,
                   int nlocal);
     ~LcaoRitzTrial();
 
-    bool evaluate(const Moments& lambda, Moments& moments, int outer_step, std::ostream& log);
+    bool evaluate(const Moments& lambda, Moments& moments, int outer_step, std::ostream& log, bool publish);
 
   private:
-    const elecstate::ElecStateLCAO<Complex>& estate_;
+    elecstate::ElecStateLCAO<Complex>& estate_;
     Dspin& dspin_;
     const hsolver::LcaoRitzReference& reference_;
     const Moments anchor_lambda_;

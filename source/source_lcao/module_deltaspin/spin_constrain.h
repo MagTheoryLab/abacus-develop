@@ -75,6 +75,12 @@ class HSolverLCAO;
 
 namespace spinconstrain
 {
+enum class LcaoRitzMode
+{
+    disabled,
+    trials,
+    accept_density
+};
 
 /**
  * @brief Singleton class implementing spin-constrained DFT (DeltaSpin).
@@ -235,12 +241,13 @@ public:
    *
    * @param outer_step Current SCF outer iteration number
    * @param rerun If true, use full PW solver for final charge update
+   * @return Whether the LCAO density matrix was built from accepted Ritz wavefunctions.
    */
-  void run_lambda_loop(int outer_step,
+  bool run_lambda_loop(int outer_step,
           bool rerun,
           std::ostream& ofs_running,
           hsolver::HSolverLCAO<TK>* lcao_solver,
-          bool use_lcao_ritz);
+          LcaoRitzMode ritz_mode);
 
   /// @brief RMS error of the most recent lambda optimization loop (-1.0 if none has run).
   double get_last_rms_error() const { return last_rms_error_; }

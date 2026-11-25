@@ -42,7 +42,9 @@ class LcaoRitzGpu
                const std::complex<double>* vectors,
                const double* reference_energy,
                const double* delta_lambda,
-               double* output_energy);
+               double* output_energy,
+               bool keep_rotation);
+    void publish_wavefunctions(int ik, std::complex<double>* waves);
     void moments(int ik, const std::complex<double>* vectors, const double* weights,
                  bool reference, double* output);
 

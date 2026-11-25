@@ -423,7 +423,7 @@ void LcaoRitzGpu::prepare(int ik, const std::complex<double>* projectors, const 
 }
 
 void LcaoRitzGpu::solve(int ik, const std::complex<double>* waves, const double* ref,
-                      const double* delta, double* eigen)
+                      const double* delta, double* eigen, bool keep_rotation)
 {
     auto& p = *impl_;
     auto& slot = p.k[ik];
@@ -460,11 +460,27 @@ void LcaoRitzGpu::solve(int ik, const std::complex<double>* waves, const double*
     check(cudaMemcpy(eigen, p.trial_energy.get(), p.bands * sizeof(double), cudaMemcpyDeviceToHost), "trial energy");
     p.gemm(CUBLAS_OP_N, CUBLAS_OP_N, rows, p.bands, p.ritz,
            p.projected.get(), rows, p.reduced.get(), p.ritz, slot.mixed.get(), p.zero);
+    if (keep_rotation && !slot.rotation)
+    {
+        slot.rotation = allocate<Z>(size_t(p.ritz) * p.bands);
+    }
     if (slot.rotation)
     {
         check(cudaMemcpy(slot.rotation.get(), p.reduced.get(), size_t(p.ritz) * p.bands * sizeof(Z),
                          cudaMemcpyDeviceToDevice), "save cutoff rotation");
     }
+}
+
+void LcaoRitzGpu::publish_wavefunctions(int ik, std::complex<double>* waves)
+{
+    auto& p = *impl_;
+    const auto& slot = p.k[ik];
+    auto* vectors = reinterpret_cast<Z*>(waves);
+    // The spin-split scratch is free after the final projected solve.
+    p.gemm(CUBLAS_OP_N, CUBLAS_OP_N, p.n, p.bands, p.ritz,
+           vectors, p.n, slot.rotation.get(), p.ritz, p.split.get(), p.zero);
+    const size_t bytes = size_t(p.n) * p.bands * sizeof(Z);
+    check(cudaMemcpy(vectors, p.split.get(), bytes, cudaMemcpyDeviceToDevice), "publish Ritz wavefunctions");
 }
 
 void LcaoRitzGpu::moments(int ik, const std::complex<double>* waves, const double* wg,

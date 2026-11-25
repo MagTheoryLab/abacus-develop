@@ -36,7 +36,7 @@ bool run_deltaspin_lambda_loop(const int iter,
     {
         /// Optimize lambda to get target magnetic moments
         const int outer_step = iter - 1;
-        sc.run_lambda_loop(outer_step, true, ofs_running, nullptr, false);
+        sc.run_lambda_loop(outer_step, true, ofs_running, nullptr, spinconstrain::LcaoRitzMode::disabled);
         sc.set_mag_converged(true);
         return true;
     }
@@ -45,7 +45,7 @@ bool run_deltaspin_lambda_loop(const int iter,
     else if (sc.mag_converged())
     {
         const int outer_step = iter - 1;
-        sc.run_lambda_loop(outer_step, true, ofs_running, nullptr, false);
+        sc.run_lambda_loop(outer_step, true, ofs_running, nullptr, spinconstrain::LcaoRitzMode::disabled);
         return true;
     }
 

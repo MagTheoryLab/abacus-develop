@@ -17,7 +17,7 @@
 namespace spinconstrain
 {
 LcaoRitzTrial::LcaoRitzTrial(const elecstate::ElecStateLCAO<Complex>& estate,
-                           const Dspin& dspin,
+                           Dspin& dspin,
                            const hsolver::LcaoRitzReference& reference,
                            const Moments& lambda,
                            int nlocal)
@@ -53,17 +53,18 @@ bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_s
     };
     if (!prepared_)
     {
-        std::vector<int> owners(kpoints, 0);
+        std::vector<int> local_owners(kpoints, 0);
         bool local_owner = false;
         for (int ik = 0; ik < kpoints; ++ik)
         {
             if (waves[ik] != nullptr && waves[ik]->get_nbands() == reference_.bands
                 && reference_.energy_by_k[ik].size() == reference_.bands)
             {
-                owners[ik] = 1;
+                local_owners[ik] = 1;
                 local_owner = true;
             }
         }
+        auto owners = local_owners;
         Parallel_Reduce::reduce_all(owners.data(), kpoints);
         if (!std::all_of(owners.begin(), owners.end(), [](int count) { return count == 1; }))
         {
@@ -80,14 +81,15 @@ bool LcaoRitzTrial::evaluate(const Moments& lambda, Moments& result, int outer_s
         {
             gpu_.reset(new LcaoRitzGpu(nlocal_, bands, reference_.bands, kpoints, geometry));
         }
+        const auto kbegin = estate_.klist->kvec_d.begin();
+        const std::vector<ModuleBase::Vector3<double>> kvec(kbegin, kbegin + kpoints);
+        const int spatial = nlocal_ / 2;
+        const auto& folded = dspin_.ritz_projectors(kvec, local_owners, spatial, projectors);
         for (int ik = 0; ik < kpoints; ++ik)
         {
-            const auto& k = estate_.klist->kvec_d[ik];
-            const int spatial = nlocal_ / 2;
-            const auto folded = dspin_.fold_ritz_projectors(k, spatial, projectors);
             if (waves[ik] != nullptr)
             {
-                gpu_->prepare(ik, folded.data(), k);
+                gpu_->prepare(ik, folded[ik].data(), kvec[ik]);
                 log << "LCAO_RITZ_OWNER k " << ik << " basis " << nlocal_ << " bands "
                     << bands << " ritz " << reference_.bands << " projectors " << projectors << '\n';
             }

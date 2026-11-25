@@ -109,12 +109,20 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
                     std::vector<std::vector<std::complex<double>>>& PI_sub) const;
 
 #if defined(__CUDA) && defined(__MPI)
-    std::vector<std::complex<double>> fold_ritz_projectors(
-        const ModuleBase::Vector3<double>& k, int spatial, int projectors) const;
+    const std::vector<std::vector<std::complex<double>>>& ritz_projectors(
+        const std::vector<ModuleBase::Vector3<double>>& kpoints,
+        const std::vector<int>& local_owners,
+        int spatial,
+        int projectors);
     spinconstrain::RitzProjectorGeometry ritz_geometry() const;
 #endif
 
   private:
+#if defined(__CUDA) && defined(__MPI)
+    std::vector<std::complex<double>> fold_ritz_projectors(
+        const ModuleBase::Vector3<double>& k, int spatial, int projectors) const;
+#endif
+
     bool needsHRUpdate() const override
     {
         return !this->hr_done || !this->sc_hr_done || this->update_lambda_[this->current_spin];
@@ -214,6 +222,14 @@ class DeltaSpin<OperatorLCAO<TK, TR>> : public OperatorLCAO<TK, TR>
     };
     std::vector<std::vector<BI_AdjacentData>> B_I_data;       ///< [iat][adj_index]
     std::vector<int> B_I_nproj;                               ///< r = max_l_plus_1^2 per constrained atom
+
+#if defined(__CUDA) && defined(__MPI)
+    std::vector<ModuleBase::Vector3<double>> ritz_kpoints_;
+    std::vector<int> ritz_owners_;
+    std::vector<std::vector<std::complex<double>>> ritz_projectors_;
+    int ritz_spatial_ = 0;
+    int ritz_projector_count_ = 0;
+#endif
 };
 
 }

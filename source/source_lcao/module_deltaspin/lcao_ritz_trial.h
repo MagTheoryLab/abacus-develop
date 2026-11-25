@@ -38,7 +38,7 @@ class LcaoRitzTrial
     using Moments = std::vector<ModuleBase::Vector3<double>>;
 
     LcaoRitzTrial(const elecstate::ElecStateLCAO<Complex>& estate,
-                  const Dspin& dspin,
+                  Dspin& dspin,
                   const hsolver::LcaoRitzReference& reference,
                   const Moments& lambda,
                   int nlocal);
@@ -48,7 +48,7 @@ class LcaoRitzTrial
 
   private:
     const elecstate::ElecStateLCAO<Complex>& estate_;
-    const Dspin& dspin_;
+    Dspin& dspin_;
     const hsolver::LcaoRitzReference& reference_;
     const Moments anchor_lambda_;
     const int nlocal_;

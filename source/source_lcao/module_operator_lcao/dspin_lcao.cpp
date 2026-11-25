@@ -208,6 +208,9 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::cal_pre_HR()
     this->paraV = this->hR->get_paraV();
     ModuleBase::timer::start("DeltaSpin", "cal_pre_HR");
     const int nat = this->ucell->nat;
+#if defined(__CUDA) && defined(__MPI)
+    this->ritz_projectors_.clear();
+#endif
     this->pre_hr.clear();
     this->pre_hr.resize(nat);
     this->B_I_data.clear();
@@ -517,6 +520,38 @@ void hamilt::DeltaSpin<hamilt::OperatorLCAO<std::complex<double>, std::complex<d
 }
 
 #if defined(__CUDA) && defined(__MPI)
+template <typename TK, typename TR>
+const std::vector<std::vector<std::complex<double>>>& hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::ritz_projectors(
+    const std::vector<ModuleBase::Vector3<double>>& kpoints,
+    const std::vector<int>& local_owners,
+    int spatial,
+    int projectors)
+{
+    int rebuild = this->ritz_projectors_.empty() || this->ritz_kpoints_ != kpoints
+                  || this->ritz_owners_ != local_owners || this->ritz_spatial_ != spatial
+                  || this->ritz_projector_count_ != projectors;
+    // All ranks must enter the same folding collectives when any owner changes.
+    Parallel_Reduce::reduce_max(rebuild);
+    if (rebuild)
+    {
+        this->ritz_projectors_.clear();
+        this->ritz_projectors_.resize(kpoints.size());
+        for (std::size_t ik = 0; ik < kpoints.size(); ++ik)
+        {
+            auto folded = this->fold_ritz_projectors(kpoints[ik], spatial, projectors);
+            if (local_owners[ik])
+            {
+                this->ritz_projectors_[ik] = std::move(folded);
+            }
+        }
+        this->ritz_kpoints_ = kpoints;
+        this->ritz_owners_ = local_owners;
+        this->ritz_spatial_ = spatial;
+        this->ritz_projector_count_ = projectors;
+    }
+    return this->ritz_projectors_;
+}
+
 template <typename TK, typename TR>
 std::vector<std::complex<double>> hamilt::DeltaSpin<hamilt::OperatorLCAO<TK, TR>>::fold_ritz_projectors(
     const ModuleBase::Vector3<double>& k, int spatial, int projectors) const

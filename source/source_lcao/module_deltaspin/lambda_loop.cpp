@@ -161,7 +161,7 @@ void spinconstrain::SpinConstrain<std::complex<double>>::run_lambda_loop(
         if (!ritz)
         {
             const auto* estate = static_cast<const elecstate::ElecStateLCAO<Complex>*>(this->pelec);
-            const auto* dspin = static_cast<const Dspin*>(this->p_operator);
+            auto* dspin = static_cast<Dspin*>(this->p_operator);
             ritz.reset(new LcaoRitzTrial(*estate, *dspin, reference, reference_lambda, nlocal));
         }
         return ritz->evaluate(this->state_.get_sc_lambda(), this->state_.get_mi(), outer_step, ofs_running);
